@@ -1,0 +1,156 @@
+using GeoParams, CairoMakie, Printf, MathTeXEngine
+import LinearAlgebra:norm
+Makie.update_theme!(fonts = (regular = texfont(), bold = texfont(:bold), italic = texfont(:italic)))
+
+cmy = 356.25*3600*24*100
+
+function main()
+
+    CharDim = SI_units(length=1000m, temperature=1000C, stress=1e7Pa, viscosity=1e20Pas)
+
+    Ly         = nondimensionalize(2e4m, CharDim)
+    T0         = nondimensionalize(673K, CharDim)
+    τxy0       = nondimensionalize(550e6Pa, CharDim)
+    Ẇ0         = nondimensionalize(5e-5Pa/s, CharDim)
+    ΔT         = nondimensionalize(20K, CharDim)
+    σ          = Ly/40
+    ε0         = nondimensionalize(8e-14s^-1, CharDim)
+    ρ          = nondimensionalize(2800kg/m^3, CharDim)
+    Cp         = nondimensionalize(1050J/kg/K, CharDim)
+    k          = nondimensionalize(2.5J/s/m/K, CharDim)
+
+    Ncy        = 100
+    Nt         = 100
+    Δy         = Ly/Ncy
+    yc         = LinRange(-Ly/2-Δy/2, Ly/2+Δy/2, Ncy+2)
+    yv         = LinRange(-Ly/2,      Ly/2,      Ncy+1)
+    Δt         = nondimensionalize(2.5e10s, CharDim)
+
+    Tc         = T0 .+ ΔT.*exp.(-yc.^2/2σ^2)  
+    Tc0        = copy(Tc) 
+    Tv         = 0.5*(Tc[1:end-1] .+ Tc[2:end])
+    ∂T∂y       =   zeros(Ncy+1)
+    qT         = T0*ones(Ncy+1)
+    τxy        =   zeros(Ncy+1) 
+    ε̇xy        = ε0*ones(Ncy+1)
+    ε̇ii        = ε0*ones(Ncy+1) 
+    η_phys     =   zeros(Ncy+1)
+    η          =   zeros(Ncy+1)
+    Vx         =   zeros(Ncy+2);  Vx .= ε0.*yc
+    RT         =   zeros(Ncy+2)
+    RV         =   zeros(Ncy+2)
+    ∂T∂τ       =   zeros(Ncy+2)
+    ∂V∂τ       =   zeros(Ncy+2)
+
+    # Monitoring
+    probes    = (Ẇ0 = zeros(Nt), τxy0 = zeros(Nt), Vx0  = zeros(Nt))
+
+    # Configure viscosity model
+    flow_nd  = SetDislocationCreep("Diabase | Caristan (1982)", CharDim)    # non-dimensionalized
+    # flow_dim = dimensionalize( flow, CharDim)       # dimensionalized
+
+    # Setup up viscosity model
+    for i in eachindex(ε̇ii)
+        η[i]     = compute_viscosity_εII(flow_nd, ε̇ii[i], (;T=Tv[i]))
+    end
+    @show minimum(dimensionalize(η, Pas, CharDim ) )
+    @show maximum(dimensionalize(η, Pas, CharDim ) )
+
+    # BC
+    BC  = :Robin
+    VxS =  ε0*yv[1]
+    VxN =  ε0*yv[end]
+
+    # PT solver
+    niter = 5000
+    θV    = 0.03
+    θT    = 0.4
+    nout  = 500
+    ϵ     = 1e-7
+
+    for it=1:Nt
+        # History
+        Tc0 .= Tc
+
+        ΔτV   = Δy^2/maximum(η)/2.1
+        ΔτT   = Δy^2/(k/ρ/Cp)/2.1
+
+        for iter=1:niter
+
+            # Kinematics
+            Vx[1]   = -Vx[2]     + 2VxS
+            if BC==:Dirichlet
+                Vx[end] = -Vx[end-1] + 2VxN
+            elseif BC==:Neumann
+                Vx[end] = Vx[end-1] + τxy0*Δy/η[end]
+            elseif BC==:Robin   
+                Vx[end] = Vx[end-1] + Δy*sqrt(2*Ẇ0/η[end])
+            end
+            ε̇xy     .= 0.5*(Vx[2:end] .- Vx[1:end-1]) ./ Δy
+
+            ε̇ii      = sqrt.(ε̇xy.^2)
+            Tv      .= 0.5*(Tc[1:end-1] .+ Tc[2:end])
+            Tc[1]    = Tc[2]
+            Tc[end]  = Tc[end-1]
+            ∂T∂y    .= (Tc[2:end] .- Tc[1:end-1]) ./ Δy
+
+            # Stress
+            for i in eachindex(ε̇ii)
+                η_phys[i]     = compute_viscosity_εII(flow_nd, ε̇ii[i], (;T=Tv[i]))
+            end
+            η        .= η_phys
+            τxy      .=  2 .* η .* ε̇xy
+            qT       .=      -k .* ∂T∂y
+
+            # Residuals
+            RT[2:end-1] .= .-(Tc[2:end-1] .- Tc0[2:end-1]) ./ Δt .- 1.0/(ρ*Cp) .* (qT[2:end] .- qT[1:end-1]) ./ Δy .+ 1.0/(ρ*Cp) .* 0.5.*(ε̇xy[1:end-1].*τxy[1:end-1] .+ ε̇xy[2:end].*τxy[2:end])
+            RV[2:end-1] .= (τxy[2:end] .- τxy[1:end-1]) ./ Δy 
+
+            # Damp residuals
+            ∂V∂τ .= RV .+ (1.0 - θV).*∂V∂τ
+            ∂T∂τ .= RT .+ (1.0 - θT).*∂T∂τ
+
+            # Update solutions
+            Vx[2:end-1] .+= ΔτV .* ∂V∂τ[2:end-1]
+            Tc[2:end-1] .+= ΔτT .* ∂T∂τ[2:end-1]
+
+            if mod(iter, nout) == 0
+                errT = norm(RT)/sqrt(length(RT))
+                errV = norm(RV)/sqrt(length(RV))
+                @printf("Iteration %05d --- Time step %5d\n", iter, it)
+                @printf("fT = %2.4e\n", errT)
+                @printf("fV = %2.4e\n", errV)
+                (errT < ϵ && errV < ϵ) ? break : continue
+            end
+
+        end 
+
+        probes.Ẇ0[it]   = τxy[end]*ε̇xy[end]
+        probes.τxy0[it] = τxy[end]
+        probes.Vx0[it]  = 0.5*(Vx[end] + Vx[end-1])
+
+        # Visualisation
+        f = Figure( fontsize=25 )
+        ax1 = Axis( f[1, 1], title = L"$$Temperature", xlabel = L"$T$ [C]", ylabel = L"$y$ [km]" )
+        lines!(ax1, ustrip.(dimensionalize(Tc, K, CharDim) .- 273K), ustrip.(dimensionalize(yc, m, CharDim)./1e3) )
+
+        ax2 = Axis( f[1, 2], title = L"$$Velocity", xlabel = L"$V$ [cm/y]", ylabel = L"$y$ [km]" )
+        lines!(ax2, ustrip.(dimensionalize(Vx, m/s, CharDim))*cmy, ustrip.(dimensionalize(yc, m, CharDim)./1e3) )
+
+        ax3 = Axis( f[2, 1], title = L"$$Viscosity", xlabel = L"$η$ [Pa.s]", ylabel = L"$y$ [km]" )
+        lines!(ax3, log10.(ustrip.(dimensionalize(η, Pas, CharDim))), ustrip.(dimensionalize(yv, m, CharDim)./1e3) )
+
+        ax3 = Axis( f[2, 2], title = L"$$Probes", xlabel = L"$$Step", ylabel = L"[-]" )
+        lines!(ax3, 1:it, ustrip.(probes.Ẇ0[1:it]  ./probes.Ẇ0[1]  ), label="ẆBC"   )
+        lines!(ax3, 1:it, ustrip.(probes.τxy0[1:it]./probes.τxy0[1]), label="τxyBC" )
+        lines!(ax3, 1:it, ustrip.(probes.Vx0[1:it] ./probes.Vx0[1] ), label="VxBC"  )
+        axislegend( ax3, framevisible = false, position = :lb)
+
+        # f[3, 2] = Legend(f, ax3, "Legend", framevisible = false)
+
+
+        display(f)
+    end
+end
+
+main()
