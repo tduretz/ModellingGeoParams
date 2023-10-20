@@ -6,11 +6,14 @@ cmy = 356.25*3600*24*100
 
 function main()
 
-    CharDim = SI_units(length=1000m, temperature=1000C, stress=1e7Pa, viscosity=1e20Pas)
+    # Unit system
+    CharDim    = SI_units(length=1000m, temperature=1000C, stress=1e7Pa, viscosity=1e20Pas)
 
+    # Physical parameters
     Ly         = nondimensionalize(2e4m, CharDim)
     T0         = nondimensionalize(673K, CharDim)
     τxy0       = nondimensionalize(550e6Pa, CharDim)
+    Vτ0        = nondimensionalize(1.0Pa*m/s, CharDim)
     Ẇ0         = nondimensionalize(5e-5Pa/s, CharDim)
     ΔT         = nondimensionalize(20K, CharDim)
     σ          = Ly/40
@@ -19,13 +22,15 @@ function main()
     Cp         = nondimensionalize(1050J/kg/K, CharDim)
     k          = nondimensionalize(2.5J/s/m/K, CharDim)
 
+    # Numerical parameters
     Ncy        = 100
-    Nt         = 100
+    Nt         = 200
     Δy         = Ly/Ncy
     yc         = LinRange(-Ly/2-Δy/2, Ly/2+Δy/2, Ncy+2)
     yv         = LinRange(-Ly/2,      Ly/2,      Ncy+1)
     Δt         = nondimensionalize(2.5e10s, CharDim)
 
+    # Allocate arrays
     Tc         = T0 .+ ΔT.*exp.(-yc.^2/2σ^2)  
     Tc0        = copy(Tc) 
     Tv         = 0.5*(Tc[1:end-1] .+ Tc[2:end])
@@ -36,6 +41,8 @@ function main()
     ε̇ii        = ε0*ones(Ncy+1) 
     η_phys     =   zeros(Ncy+1)
     η          =   zeros(Ncy+1)
+    ΔτV        =   zeros(Ncy)
+    η_mm       =   zeros(Ncy)
     Vx         =   zeros(Ncy+2);  Vx .= ε0.*yc
     RT         =   zeros(Ncy+2)
     RV         =   zeros(Ncy+2)
@@ -57,13 +64,13 @@ function main()
     @show maximum(dimensionalize(η, Pas, CharDim ) )
 
     # BC
-    BC  = :Robin
+    BC  = :Robin2
     VxS =  ε0*yv[1]
     VxN =  ε0*yv[end]
 
     # PT solver
-    niter = 5000
-    θV    = 0.03
+    niter = 25000
+    θV    = 0.2
     θT    = 0.4
     nout  = 500
     ϵ     = 1e-7
@@ -72,8 +79,9 @@ function main()
         # History
         Tc0 .= Tc
 
-        ΔτV   = Δy^2/maximum(η)/2.1
-        ΔτT   = Δy^2/(k/ρ/Cp)/2.1
+        η_mm .= min(η[1:end-1], η[2:end])
+        ΔτV  .= Δy^2 ./η_mm/2.1
+        ΔτT   = Δy^2  /(k/ρ/Cp)/2.1
 
         for iter=1:niter
 
@@ -83,11 +91,12 @@ function main()
                 Vx[end] = -Vx[end-1] + 2VxN
             elseif BC==:Neumann
                 Vx[end] = Vx[end-1] + τxy0*Δy/η[end]
-            elseif BC==:Robin   
+            elseif BC==:Robin1  
                 Vx[end] = Vx[end-1] + Δy*sqrt(2*Ẇ0/η[end])
+            elseif BC==:Robin2  
+                Vx[end] =sqrt(Vx[end-1]^2 + Δy*2*Vτ0/η[end])
             end
             ε̇xy     .= 0.5*(Vx[2:end] .- Vx[1:end-1]) ./ Δy
-
             ε̇ii      = sqrt.(ε̇xy.^2)
             Tv      .= 0.5*(Tc[1:end-1] .+ Tc[2:end])
             Tc[1]    = Tc[2]
@@ -117,7 +126,8 @@ function main()
             if mod(iter, nout) == 0
                 errT = norm(RT)/sqrt(length(RT))
                 errV = norm(RV)/sqrt(length(RV))
-                @printf("Iteration %05d --- Time step %5d\n", iter, it)
+                (Δy/2/maximum(Vx) < Δt) ? Δt = Δy/2/maximum(Vx) : Δt=Δt
+                @printf("Iteration %05d --- Time step %4d --- Δt = %2.2e --- ΔtC = %2.2e \n", iter, it, ustrip(dimensionalize(Δt, s, CharDim)), ustrip(dimensionalize(Δy/2/maximum(Vx), s, CharDim)))
                 @printf("fT = %2.4e\n", errT)
                 @printf("fV = %2.4e\n", errV)
                 (errT < ϵ && errV < ϵ) ? break : continue
@@ -130,26 +140,25 @@ function main()
         probes.Vx0[it]  = 0.5*(Vx[end] + Vx[end-1])
 
         # Visualisation
-        f = Figure( fontsize=25 )
-        ax1 = Axis( f[1, 1], title = L"$$Temperature", xlabel = L"$T$ [C]", ylabel = L"$y$ [km]" )
-        lines!(ax1, ustrip.(dimensionalize(Tc, K, CharDim) .- 273K), ustrip.(dimensionalize(yc, m, CharDim)./1e3) )
+        if mod(it, 10)==0
+            f = Figure( fontsize=25 )
+            ax1 = Axis( f[1, 1], title = L"$$Temperature", xlabel = L"$T$ [C]", ylabel = L"$y$ [km]" )
+            lines!(ax1, ustrip.(dimensionalize(Tc, K, CharDim) .- 273K), ustrip.(dimensionalize(yc, m, CharDim)./1e3) )
 
-        ax2 = Axis( f[1, 2], title = L"$$Velocity", xlabel = L"$V$ [cm/y]", ylabel = L"$y$ [km]" )
-        lines!(ax2, ustrip.(dimensionalize(Vx, m/s, CharDim))*cmy, ustrip.(dimensionalize(yc, m, CharDim)./1e3) )
+            ax2 = Axis( f[1, 2], title = L"$$Velocity", xlabel = L"$V$ [cm/y]", ylabel = L"$y$ [km]" )
+            lines!(ax2, ustrip.(dimensionalize(Vx, m/s, CharDim))*cmy, ustrip.(dimensionalize(yc, m, CharDim)./1e3) )
 
-        ax3 = Axis( f[2, 1], title = L"$$Viscosity", xlabel = L"$η$ [Pa.s]", ylabel = L"$y$ [km]" )
-        lines!(ax3, log10.(ustrip.(dimensionalize(η, Pas, CharDim))), ustrip.(dimensionalize(yv, m, CharDim)./1e3) )
+            ax3 = Axis( f[2, 1], title = L"$$Viscosity", xlabel = L"$η$ [Pa.s]", ylabel = L"$y$ [km]" )
+            lines!(ax3, log10.(ustrip.(dimensionalize(η, Pas, CharDim))), ustrip.(dimensionalize(yv, m, CharDim)./1e3) )
 
-        ax3 = Axis( f[2, 2], title = L"$$Probes", xlabel = L"$$Step", ylabel = L"[-]" )
-        lines!(ax3, 1:it, ustrip.(probes.Ẇ0[1:it]  ./probes.Ẇ0[1]  ), label="ẆBC"   )
-        lines!(ax3, 1:it, ustrip.(probes.τxy0[1:it]./probes.τxy0[1]), label="τxyBC" )
-        lines!(ax3, 1:it, ustrip.(probes.Vx0[1:it] ./probes.Vx0[1] ), label="VxBC"  )
-        axislegend( ax3, framevisible = false, position = :lb)
+            ax3 = Axis( f[2, 2], title = L"$$Probes", xlabel = L"$$Step", ylabel = L"[-]" )
+            lines!(ax3, 1:it, ustrip.(probes.Ẇ0[1:it]  ./probes.Ẇ0[1]  ), label="ẆBC"   )
+            lines!(ax3, 1:it, ustrip.(probes.τxy0[1:it]./probes.τxy0[1]), label="τxyBC" )
+            lines!(ax3, 1:it, ustrip.(probes.Vx0[1:it] ./probes.Vx0[1] ), label="VxBC"  )
+            axislegend( ax3, framevisible = false, position = :lb)
 
-        # f[3, 2] = Legend(f, ax3, "Legend", framevisible = false)
-
-
-        display(f)
+            display(f)
+        end
     end
 end
 
