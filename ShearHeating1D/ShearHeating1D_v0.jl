@@ -1,4 +1,4 @@
-using GeoParams, CairoMakie, Printf, MathTeXEngine
+using GeoParams, CairoMakie, Printf, MathTeXEngine, BenchmarkTools
 import LinearAlgebra:norm
 Makie.update_theme!(fonts = (regular = texfont(), bold = texfont(:bold), italic = texfont(:italic)))
 
@@ -83,7 +83,9 @@ function main()
         @. ΔτV   = Δy^2/η_mm/2.1
         ΔτT      = Δy^2/(k/ρ/Cp)/2.1
 
-        @time @views for iter=1:niter
+        a = @allocated begin
+
+        @views for iter=1:niter
 
             # Kinematics
             Vx[1]   = -Vx[2]     + 2VxS
@@ -134,6 +136,7 @@ function main()
             # end
 
         end 
+        end; a > 0 && @show a
 
         probes.Ẇ0[it]   = τxy[end]*ε̇xy[end]
         probes.τxy0[it] = τxy[end]
