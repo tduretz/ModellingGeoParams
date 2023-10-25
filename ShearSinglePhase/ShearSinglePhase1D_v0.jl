@@ -50,7 +50,7 @@ function main()
 
     # Numerical parameters
     Ncy        = 100
-    Nt         = 5000
+    Nt         = 10000
     Δy         = Ly/Ncy
     yc         = LinRange(-Ly/2-Δy/2, Ly/2+Δy/2, Ncy+2)
     yv         = LinRange(-Ly/2,      Ly/2,      Ncy+1)
