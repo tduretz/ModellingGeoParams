@@ -51,12 +51,19 @@ function main()
 
     # Monitoring
     probes    = (Ẇ0 = zeros(Nt), τxy0 = zeros(Nt), Vx0  = zeros(Nt))
-
+    
     # Configure viscosity model
-    flow_nd0 = SetDislocationCreep("Diabase | Caristan (1982)", CharDim)    # non-dimensionalized
+    flow_nd0 = DislocationCreep(;
+        Name = "Diabase | Caristan (1982)",
+        n = 3.05NoUnits,
+        A = 6.0e-2MPa^(-61 // 20) / s,
+        E = 276kJ / mol,
+        V = 0m^3 / mol,
+        r = 0NoUnits,
+        Apparatus = AxialCompression,
+    )
     flow_nd  = Transform_DislocationCreep(flow_nd0, CharDim)
-    # flow_dim = dimensionalize( flow, CharDim)       # dimensionalized
-
+    
     # Setup up viscosity model
     for i in eachindex(ε̇ii)
         η[i]     = compute_viscosity_εII(flow_nd, ε̇ii[i], (;T=Tv[i]))
