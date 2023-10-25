@@ -34,7 +34,7 @@ function main()
     τzzi       = Pi + σzzi
     τxyi       = 0.0
 
-    E          = nondimensionalize(45MPa, CharDim)
+    E          = nondimensionalize(20MPa, CharDim)
     ν          = 0.2
     Ly         = nondimensionalize(2e4m, CharDim)
     Ẇ0         = nondimensionalize(5e-5Pa/s, CharDim)
@@ -42,7 +42,7 @@ function main()
     ε0         = nondimensionalize(1e-9s^-1, CharDim)
     G          = E/2.0/(1+ν)
     Kb         = E/3.0/(1-2ν)
-    Coh0       = nondimensionalize(0Pa, CharDim)*40
+    Coh0       = nondimensionalize(0Pa, CharDim)*0
     μs         = nondimensionalize(1e25Pa*s, CharDim)
     ϕ          = 40*π/180.
     ψ          = 10*π/180.   
@@ -160,7 +160,7 @@ function main()
                     Ptc[pl]  = Pt[pl] + Kb*Δt*sin(ψ)*λ̇rel[pl]
                     ηvep[pl] = (Coh[pl]*cos(ϕ) + Ptc[pl]*sin(ϕ) + ηvp*λ̇rel[pl]) / 2.0 / ε̇iiᵉᶠᶠ[pl]
                     τxy[pl]  =  2 * ηve[pl] * (ε̇xy[pl] + τxy0[pl]/2/ηe - τxy[pl]/τii[pl]/2*λ̇rel[pl] ) 
-                    τyy[pl]  =  2 * ηve[pl] * (ε̇yy[pl]+λ̇rel[pl]*sin(ψ) + τyy0[pl]/2/ηe - τyy[pl]/τii[pl]/2*λ̇rel[pl] )
+                    τyy[pl]  =  2 * ηve[pl] * (ε̇yy[pl]-λ̇rel[pl]*sin(ψ) + τyy0[pl]/2/ηe - τyy[pl]/τii[pl]/2*λ̇rel[pl] )
                     τxx[pl]  =  2 * ηve[pl] * (0.0     + τxx0[pl]/2/ηe - τxx[pl]/τii[pl]/2*λ̇rel[pl] )
                     τzz[pl]  =  2 * ηve[pl] * (0.0     + τzz0[pl]/2/ηe - τzz[pl]/τii[pl]/2*λ̇rel[pl] )
                     τii[pl]  = sqrt(τxy[pl]^2 + 0.5*(τyy[pl]^2 + τxx[pl]^2 + τzz[pl]^2))
