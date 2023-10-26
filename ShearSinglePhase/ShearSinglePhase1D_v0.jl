@@ -1,20 +1,16 @@
-using GeoParams, Plots, Printf, MathTeXEngine, BenchmarkTools, LinearAlgebra
+using GeoParams, Plots, Printf, MathTeXEngine, BenchmarkTools, LinearAlgebra, StaticArrays
 import LinearAlgebra:norm
 # Makie.update_theme!(fonts = (regular = texfont(), bold = texfont(:bold), italic = texfont(:italic)))
 
 const cmy = 356.25*3600*24*100
 
-function PrincipalStress(τxx, τzz, τxz, P)
-    σ1   = (x=zeros(size(τxx)), z=zeros(size(τxx)) )
+function PrincipalStress!(σ1, τxx, τzz, τxz, P)
     for i in eachindex(τxz)
-        if P[i]>1e-13
-            σ = [-P[i]+τxx[i] τxz[i]; τxz[i] -P[i]+τzz[i]]
-            v = eigvecs(σ)
-            σ1.x[i] = v[1,1]
-            σ1.z[i] = v[2,1]
-        end
+        σ = @SMatrix[-P[i]+τxx[i] τxz[i]; τxz[i] -P[i]+τzz[i]]
+        v = eigvecs(σ)
+        σ1.x[i] = v[1,1]
+        σ1.z[i] = v[2,1]
     end
-    return σ1
 end
 
 function main()
@@ -94,6 +90,7 @@ function main()
     ∂Pt∂τ      =    zeros(Ncy+1)
     ∂Vx∂τ      =    zeros(Ncy+2)
     ∂Vy∂τ      =    zeros(Ncy+2)
+    σ1         = (x=zeros(size(τxx)), z=zeros(size(τxx)) )
  
     ε̇xy_pl     =   zeros(Ncy+1)
     ε̇yy_pl     =   zeros(Ncy+1)
@@ -240,7 +237,7 @@ function main()
         # Visualisation
         if mod(it, 10)==0 || it==1
 
-            σ1 = PrincipalStress(τxx, τyy, τxy, Pt)
+            PrincipalStress!(σ1, τxx, τyy, τxy, Pt)
 
             p1=plot( title = "Total pressure", xlabel = L"$P$ [kPa]", ylabel = L"$y$ [km]" )
             p1=plot!(ustrip.(dimensionalize(Pt, Pa, CharDim))/1e3, ustrip.(dimensionalize(yv, m, CharDim)./1e3) )
