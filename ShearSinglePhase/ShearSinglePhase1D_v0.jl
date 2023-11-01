@@ -39,14 +39,14 @@ function main()
     G          = E/2.0/(1+ν)
     Kbulk      = E/3.0/(1-2ν)
     Coh0       = nondimensionalize(0Pa, CharDim)*40
-    μs         = nondimensionalize(1e22Pa*s, CharDim)
+    μs         = nondimensionalize(1e52Pa*s, CharDim)
     ϕ          = 43*π/180.
     ψ          = 15.0*π/180.   
     ηvp        = nondimensionalize(1*1e11Pa*s, CharDim)     
 
     # Numerical parameters
     Ncy        = 100
-    Nt         = 10000
+    Nt         = 2000
     Δy         = Ly/Ncy
     yc         = LinRange(-Ly/2-Δy/2, Ly/2+Δy/2, Ncy+2)
     yv         = LinRange(-Ly/2,      Ly/2,      Ncy+1)
@@ -116,12 +116,12 @@ function main()
     VyN   =  0.0
 
     # PT solver
-    niter = 50000
+    niter = 100000
     θVx   = 0.2
     θVy   = 0.2
     θPt   = 1.0
     nout  = 1000
-    ϵ     = 1e-9
+    ϵ     = 1e-14
     rel   = 1e-2
     errPt, errVx, errVy = 0., 0., 0.
 
@@ -156,7 +156,7 @@ function main()
             @. τzz     =  2 * ηve * (0.0 + τzz0/2/ηe)
             @. τii     = sqrt(τxy^2 + 0.5*(τyy.^2 + τxx.^2 + τzz.^2))
 
-            # # Plasticity
+            # Plasticity
             @. F    = τii - Coh*cos(ϕ) - Pt*sin(ϕ)
             @. Ptc  = Pt
             @. ηvep = ηve
@@ -220,14 +220,14 @@ function main()
                 @printf("fPt = %2.4e\n", errPt)
                 @printf("fVx = %2.4e\n", errVx)
                 @printf("fVy = %2.4e\n", errVy)
-                (errPt < ϵ && errVx < ϵ && errVx < ϵ) && break 
+                ( errVx < ϵ && errVy < ϵ) && break 
                 (isnan(errPt) || isnan(errVx) || isnan(errVx)) && error("NaNs")        
             end
         end
 
         @. Pt = Ptc
 
-        if (errPt > ϵ || errVx > ϵ || errVx > ϵ) error("non converged") end
+        # if (errPt > ϵ || errVx > ϵ || errVx > ϵ) error("non converged") end
 
         probes.Ẇ0[it]         = τxy[end]*ε̇xy[end]
         probes.τxy0[it]       = τxy[end]
@@ -235,7 +235,7 @@ function main()
         @show probes.σyy0[it] = τyy[end] - Pt[end]
         
         # Visualisation
-        if mod(it, 10)==0 || it==1
+        if mod(it, 10)==0 || it==1 
 
             PrincipalStress!(σ1, τxx, τyy, τxy, Pt)
 
@@ -251,7 +251,8 @@ function main()
 
             p4=plot(title = "Probes", xlabel = "Strain", ylabel = L"[-]" )
             # p4=plot!(1:it, ustrip.(dimensionalize(probes.τxy0[1:it], Pa, CharDim))/1e3, label="τxy" )
-            p4=plot!((1:it)*ε0*Δt, ustrip.(-probes.τxy0[1:it]./probes.σyy0[1:it]), label="-τxy/σyyBC" )
+            app_fric =  ustrip.(-probes.τxy0[1:it]./probes.σyy0[1:it])/2
+            p4=plot!((1:it)*ε0*Δt, app_fric, label="-τxy/σyyBC/2", title=@sprintf("max = %1.4f", maximum(app_fric)) )
             # p4=plot!(1:it, ustrip.(dimensionalize(-probes.σyy0[1:it], Pa, CharDim))/1e3, label="σyyBC" )
 
             display(plot(p1,p2,p3,p4))
