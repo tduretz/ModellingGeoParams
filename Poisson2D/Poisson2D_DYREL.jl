@@ -5,16 +5,22 @@ import LinearAlgebra:norm
 const cmy = 356.25*3600*24*100
 const ky  = 356.25*3600*24*1e3
 
-function GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt )
-    return maximum( (1.0 ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 .+ k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2) + k.y[:,1:end-1]/ρ/Cp/Δy^2 + k.y[:,2:end-0]/ρ/Cp/Δy^2 + k.x[1:end-1,:]/ρ/Cp/Δx^2 + k.x[2:end-0,:]/ρ/Cp/Δx^2)
+function GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, transient )
+    return maximum( (transient ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 .+ k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2) + k.y[:,1:end-1]/ρ/Cp/Δy^2 + k.y[:,2:end-0]/ρ/Cp/Δy^2 + k.x[1:end-1,:]/ρ/Cp/Δx^2 + k.x[2:end-0,:]/ρ/Cp/Δx^2)
 end
 
-function ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, rhs )
+function ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, rhs, T_South, T_North, transient )
+    
+    Tc[:,1]   .= -Tc[:,2]     .+ 2*T_South*rhs
+    Tc[:,end] .= -Tc[:,end-1] .+ 2*T_North*rhs
+    Tc[1,:]   .= Tc[2,:]
+    Tc[end,:] .= Tc[end-1,:]
+
     @. ∂T∂x        = (Tc[2:end,2:end-1] - Tc[1:end-1,2:end-1])/Δx
     @. qTx         = -k.x .* ∂T∂x
     @. ∂T∂y        = (Tc[2:end-1,2:end] - Tc[2:end-1,1:end-1])/Δy
     @. qTy         = -k.y * ∂T∂y
-    @. RT[2:end-1,2:end-1] = -(Tc[2:end-1,2:end-1] - rhs*Tc0[2:end-1,2:end-1]) / Δt - 1.0/(ρ*Cp) * (qTx[2:end,:] - qTx[1:end-1,:])/Δx - 1.0/(ρ*Cp) * (qTy[:,2:end] - qTy[:,1:end-1])/Δy + rhs/(ρ*Cp) *  Qr[2:end-1,2:end-1]
+    @. RT[2:end-1,2:end-1] = -transient*(Tc[2:end-1,2:end-1] - rhs*Tc0[2:end-1,2:end-1]) / Δt - 1.0/(ρ*Cp) * (qTx[2:end,:] - qTx[1:end-1,:])/Δx - 1.0/(ρ*Cp) * (qTy[:,2:end] - qTy[:,1:end-1])/Δy + rhs/(ρ*Cp) *  Qr[2:end-1,2:end-1]
 end
 
 function MainPoisson2D()
@@ -34,13 +40,16 @@ function MainPoisson2D()
     σ          = Ly/40
     t          = 0.
 
+    # Transient problem?
+    transient  = 0
+
     # BCs
     T_North    = nondimensionalize(500C, CharDim)
     T_South    = nondimensionalize(520C, CharDim)
 
     # Numerical parameters
-    Ncx        = 400
-    Ncy        = 400
+    Ncx        = 40
+    Ncy        = 40
     Nt         = 1
     Δx         = Lx/Ncx
     Δy         = Ly/Ncy
@@ -81,7 +90,7 @@ function MainPoisson2D()
         t       += Δt 
 
         # DYREL
-        λmaxT = GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt )*GershT
+        λmaxT = GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, transient )*GershT
         λminT = 1.0
 
         CFL   = 0.99
@@ -99,22 +108,21 @@ function MainPoisson2D()
             Tc[end,:] .= Tc[end-1,:]
 
             # Residuals
-            ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 1.0 )
+            ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 1.0, T_South, T_North, transient )
 
             @. ∂T∂τ                  = (2-cT*hT)/(2+cT*hT)*∂T∂τ + 2*hT/(2+cT*hT)*RT
             @. δT                    = hT*∂T∂τ
             @. Tc[2:end-1,2:end-1] .+= δT[2:end-1,2:end-1]
             
             if mod(iter, nout) == 0 
-
-                ResidualThermics2D!(KδT1, Tc,     Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0 )
-                ResidualThermics2D!(KδT,  Tc.-δT, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0 )
+                ResidualThermics2D!(KδT1, Tc,     Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0, T_South, T_North, transient )
+                ResidualThermics2D!(KδT,  Tc.-δT, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0, T_South, T_North, transient )
                 λminT =  abs(sum(.-δT.*(KδT1.-KδT))/sum(δT.*δT) / 1.0 )
-                λmaxT = GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt )*GershT                
-                hT    = 2/sqrt(λmaxT)*CFL 
-                cT    = 2*sqrt(λminT) 
+                λmaxT = GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, transient )*GershT                
+                hT    = 2/sqrt(λmaxT)*CFL  
+                cT    = 2*sqrt(λminT)
     
-                ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 1.0 )
+                ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 1.0, T_South, T_North, transient )
 
                 errT = norm(RT)/sqrt(length(RT))
                 @printf("Iteration %05d --- Time step %4d --- Δt = %2.2e \n", iter, it, ustrip(dimensionalize(Δt, s, CharDim)))
