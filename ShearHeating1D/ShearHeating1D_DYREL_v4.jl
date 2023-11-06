@@ -5,19 +5,56 @@ import LinearAlgebra:norm
 const cmy = 356.25*3600*24*100
 const ky  = 356.25*3600*24*1e3
 
-function GershgorinMechanics1D( η, Δy )
-    return maximum( (η[1:end-1] .+ η[2:end])./Δy^2 + η[2:end]./Δy^2 .+ η[1:end-1]./Δy^2)
-end
-
-function ResidualMechanics!(RV, Vx, flow_nd, η, ηe, η_phys, Δy, τxy, τxy0, ε̇xy, ε̇ii, Tv, rhs )
-    @. ε̇xy     = 0.5*(Vx[2:end] - Vx[1:end-1])/Δy
-    @. ε̇ii     = sqrt(ε̇xy^2)
-    # Stress
+function Viscosity_ε̇ii!(η_phys, ε̇ii, Tv, flow_nd)
     for i in eachindex(ε̇ii)
         η_phys[i]   = compute_viscosity_εII(flow_nd, ε̇ii[i], (;T=Tv[i]))
     end
-    @. η        = (1.0/η_phys + 1.0/(ηe))^(-1)
-    @. τxy      =  2 * η * (ε̇xy + τxy0/(2*ηe))
+end
+
+function Viscosity_τii!(η_phys, τii, Tv, flow_nd)
+    for i in eachindex(τii)
+        η_phys[i]   = compute_viscosity_τII(flow_nd, τii[i], (;T=Tv[i]))
+    end
+end
+
+function ViscosityDerivatives!(∂η∂ε̇, ∂η∂T, ε̇ii, Tv, flow_nd)
+    for i in eachindex(ε̇ii)
+        dε̇iip   = 1e-6*ε̇ii[i]
+        ε̇iip    = ε̇ii[i] + dε̇iip
+        dT      = 1e-6*Tv[i]
+        Tp      = Tv[i] + dT
+        η       = compute_viscosity_εII(flow_nd, ε̇ii[i], (;T=Tv[i]))
+        ∂η∂ε̇[i] = ( compute_viscosity_εII(flow_nd, ε̇iip, (;T=Tv[i])) - η ) / dε̇iip
+        ∂η∂T[i] = ( compute_viscosity_εII(flow_nd, ε̇ii[i],  (;T=Tp)) - η ) / dT
+    end
+end
+
+function GershgorinMechanics1D( η, Δy; ∂η∂ε̇=∂η∂ε̇, ∂η∂T=∂η∂T, ∂ε̇∂VxN=∂ε̇∂VxN, ∂ε̇∂VxS=∂ε̇∂VxS, ε̇xy=ε̇xy  )
+    # pd = 1.0
+    # cVxC = (η[1:end-1] .+ η[2:end])./Δy^2 - pd*2.0.*ε̇xy[2:end].* ∂η∂ε̇[2:end] .* ∂ε̇∂VxS[2:end] +  pd*2.0.*ε̇xy[1:end-1].* ∂η∂ε̇[1:end-1] .* ∂ε̇∂VxN[1:end-1]
+    # cVxS = -η[1:end-1]./Δy^2 .+ pd*2.0.*ε̇xy[1:end-1].* ∂η∂ε̇[1:end-1] .* ∂ε̇∂VxS[1:end-1]
+    # cVxN = -η[2:end]  ./Δy^2 .- pd*2.0.*ε̇xy[2:end].* ∂η∂ε̇[2:end] .* ∂ε̇∂VxN[2:end]
+    # cTS  =  .-ε̇xy[1:end-1]./Δy^2 .* ∂η∂T[1:end-1]
+    # cTN  = ε̇xy[2:end]  ./Δy^2 .* ∂η∂T[2:end]
+    # cTC  = cTS + cTN 
+    # return  maximum(cVxC .+ abs.(cVxS) .+ abs.(cVxN) .+ abs.(cTC) .+ abs.(cTS) .+ abs.(cTN))
+    return maximum( (η[1:end-1] .+ η[2:end])./Δy^2 + η[2:end]./Δy^2 .+ η[1:end-1]./Δy^2)
+end
+
+function ResidualMechanics_εII!(RV, Vx, flow_nd, η, ηe, η_phys, Δy, τxy, τxy0, ε̇xy, ε̇ii, Tv, rhs )
+    @. ε̇xy         = 0.5*(Vx[2:end] - Vx[1:end-1])/Δy
+    @. ε̇ii         = sqrt(ε̇xy^2)
+    Viscosity_ε̇ii!(η_phys, ε̇ii, Tv, flow_nd)
+    @. η           = (1.0/η_phys + 1.0/(ηe))^(-1)
+    @. τxy         =  2 * η * (ε̇xy + τxy0/(2*ηe))
+    @. RV[2:end-1] =  (τxy[2:end]  - τxy[1:end-1]) / Δy 
+end
+
+function ResidualMechanics_τII!(RV, Vx, flow_nd, η, ηe, η_phys, Δy, τxy, τxy0, ε̇xy, τii, Tv, rhs )
+    Viscosity_τii!(η_phys, τii, Tv, flow_nd)
+    @. η           = (1.0/η_phys + 1.0/(ηe))^(-1)
+    @. τxy         =  2 * η * (ε̇xy + rhs*τxy0/(2*ηe))
+    @. τii         = sqrt.(τxy.^2)
     @. RV[2:end-1] =  (τxy[2:end]  - τxy[1:end-1]) / Δy 
 end
 
@@ -26,8 +63,8 @@ function GershgorinThermics1D( k, ρ, Cp, Δy, Δt )
 end
 
 function ResidualThermics!(RT, Tc, Tc0, Δt, ρ, Cp, k, Δy, ∂T∂y, qT, ε̇xy, τxy, rhs )
-    @. ∂T∂y    = (Tc[2:end] - Tc[1:end-1])/Δy
-    @. qT       =     -k * ∂T∂y
+    @. ∂T∂y        = (Tc[2:end] - Tc[1:end-1])/Δy
+    @. qT          = -k * ∂T∂y
     @. RT[2:end-1] = -(Tc[2:end-1] - rhs*Tc0[2:end-1]) / Δt - 1.0/(ρ*Cp) * (qT[2:end] - qT[1:end-1])/Δy + rhs/(ρ*Cp) * 0.5*(ε̇xy[1:end-1]*τxy[1:end-1] + ε̇xy[2:end]*τxy[2:end])
 end
 
@@ -39,9 +76,9 @@ function main()
     # Physical parameters
     Ly         = nondimensionalize(2e4m, CharDim)
     T0         = nondimensionalize(500C, CharDim)
-    τxyi       = nondimensionalize(250e6Pa, CharDim)
-    Vτ0        = nondimensionalize(1.0Pa*m/s, CharDim)
-    Ẇ0         = nondimensionalize(5e-5Pa/s, CharDim)
+    τxyi       = nondimensionalize(10e6Pa, CharDim)
+    Vτ0        = nondimensionalize(0.001Pa*m/s, CharDim)
+    Ẇ0         = nondimensionalize(5e-7Pa/s, CharDim)
     ε0         = nondimensionalize(5e-14s^-1, CharDim)
     ρ          = nondimensionalize(3000kg/m^3, CharDim)
     Cp         = nondimensionalize(1050J/kg/K, CharDim)
@@ -68,6 +105,7 @@ function main()
     qT         = T0*ones(Ncy+1)
     τxy        =   zeros(Ncy+1) 
     τxy0       =   zeros(Ncy+1)
+    τii        =   zeros(Ncy+1) 
     ε̇xy        = ε0*ones(Ncy+1)
     ε̇ii        = ε0*ones(Ncy+1) 
     η_phys     =   zeros(Ncy+1)
@@ -80,6 +118,10 @@ function main()
     ∂T∂τ       =   zeros(Ncy+2)
     ∂V∂τ       =   zeros(Ncy+2)
 
+    ∂η∂ε̇       =   zeros(Ncy+1)
+    ∂η∂T       =   zeros(Ncy+1)
+    ∂ε̇∂VxN       =   zeros(Ncy+1)
+    ∂ε̇∂VxS       =   zeros(Ncy+1)
 
     Vxit       =   zeros(Ncy+2)
     KδV1       =   zeros(Ncy+2)
@@ -120,6 +162,7 @@ function main()
     for i in eachindex(ε̇ii)
         η[i]     = compute_viscosity_εII(flow_nd, ε̇ii[i], (;T=Tv[i]))
     end
+    τii = 2.0 .* η .* ε̇ii
     @show minimum(dimensionalize(η, Pas, CharDim ) )
     @show maximum(dimensionalize(η, Pas, CharDim ) )
 
@@ -134,6 +177,8 @@ function main()
     θT    = 0.2
     nout  = 500
     ϵ     = 1e-8
+    GershV = 4.0
+    GershT = 4.0
 
     for it=1:Nt
         # History
@@ -156,18 +201,27 @@ function main()
         #     @show (ε0, ε1)
         # end
 
+        @. ε̇xy     = 0.5*(Vx[2:end] - Vx[1:end-1])/Δy
+        @. ε̇ii     = sqrt(ε̇xy^2)
+        ViscosityDerivatives!(∂η∂ε̇, ∂η∂T, ε̇ii, Tv, flow_nd)
+        @. ∂ε̇∂VxN  = 0.5/Δy*ε̇xy./ε̇ii
+        @. ∂ε̇∂VxS  = -∂ε̇∂VxN
+
         # DYREL
-        λmaxV = GershgorinMechanics1D( η, Δy )*4
+        λmaxV = GershgorinMechanics1D( η, Δy; ∂η∂ε̇, ∂η∂T, ∂ε̇∂VxN, ∂ε̇∂VxS, ε̇xy )*GershV
         λminV = 1.0
         h     = 1.0
         h_ρV  = 4/(λminV + λmaxV)
         ch_ρV = 4*sqrt(λminV*λmaxV)/(λminV + λmaxV)
 
-        λmaxT = GershgorinThermics1D( k, ρ, Cp, Δy, Δt ) *4
-        λminT = 1.0
+        λmaxT = GershgorinThermics1D( k, ρ, Cp, Δy, Δt )*GershT
+        λminT = 1.0/Δt
         h     = 1.0
         h_ρT  = 4/(λminT + λmaxT)
         ch_ρT = 4*sqrt(λminT*λmaxT)/(λminT + λmaxT)
+
+        @show (λminV, λmaxV)
+        @show (λminT, λmaxT)
 
         iters = 0
         @views for iter=1:niter
@@ -194,6 +248,8 @@ function main()
 
             # Residuals
             ResidualMechanics!(RV, Vx, flow_nd, η, ηe, η_phys, Δy, τxy, τxy0, ε̇xy, ε̇ii, Tv, 1.0 )
+            # ResidualMechanics!(RV, Vx, flow_nd, η, ηe, η_phys, Δy, τxy, τxy0, ε̇xy, τii, Tv, 1.0 )
+
             ResidualThermics!(RT, Tc, Tc0, Δt, ρ, Cp, k, Δy, ∂T∂y, qT, ε̇xy, τxy, 1.0 )
            
             # # Damp residuals
@@ -215,22 +271,23 @@ function main()
             if mod(iter, nout) == 0 
 
                 # Joldes et al. (2011)
+                ViscosityDerivatives!(∂η∂ε̇, ∂η∂T, ε̇ii, Tv, flow_nd)
+                @. ∂ε̇∂VxN  = 0.5/Δy*ε̇xy./ε̇ii
+                @. ∂ε̇∂VxS  = -∂ε̇∂VxN
+
                 ResidualMechanics!(KδV1, Vx, flow_nd, η, ηe, η_phys, Δy, τxy, τxy0, ε̇xy, ε̇ii, Tv, 0.0 )
                 ResidualMechanics!(KδV, Vxit, flow_nd, η, ηe, η_phys, Δy, τxy, τxy0, ε̇xy, ε̇ii, Tv, 0.0 )
                 λminV =  abs(sum(.-δV.*(KδV1.-KδV))/sum(δV.*δV) / 1.0 )
-                λmaxV = GershgorinMechanics1D( η, Δy ) * 4
+                λmaxV = GershgorinMechanics1D( η, Δy; ∂η∂ε̇, ∂η∂T, ∂ε̇∂VxN, ∂ε̇∂VxS, ε̇xy ) * GershV
                 h_ρV  = 4/(λminV + λmaxV)
                 ch_ρV = 4*sqrt(λminV*λmaxV)/(λminV + λmaxV)
 
                 ResidualThermics!(KδT1, Tc, Tc0, Δt, ρ, Cp, k, Δy, ∂T∂y, qT, ε̇xy, τxy, 0.0 )
                 ResidualThermics!(KδT, Tcit, Tc0, Δt, ρ, Cp, k, Δy, ∂T∂y, qT, ε̇xy, τxy, 0.0 )
                 λminT =  abs(sum(.-δT.*(KδT1.-KδT))/sum(δT.*δT) / 1.0 )
-                λmaxT = GershgorinThermics1D( k, ρ, Cp, Δy, Δt )  * 4
+                λmaxT = GershgorinThermics1D( k, ρ, Cp, Δy, Δt )  * GershT
                 h_ρT  = 4/(λminT + λmaxT)
                 ch_ρT = 4*sqrt(λminT*λmaxT)/(λminT + λmaxT)
-
-                @show (λminV, λmaxV)
-                @show (λminT, λmaxT)
 
                 ResidualMechanics!(RV, Vx, flow_nd, η, ηe, η_phys, Δy, τxy, τxy0, ε̇xy, ε̇ii, Tv, 1.0 )
                 ResidualThermics!(RT, Tc, Tc0, Δt, ρ, Cp, k, Δy, ∂T∂y, qT, ε̇xy, τxy, 1.0 )    
@@ -240,6 +297,8 @@ function main()
                 @printf("Iteration %05d --- Time step %4d --- Δt = %2.2e --- ΔtC = %2.2e \n", iter, it, ustrip(dimensionalize(Δt, s, CharDim)), ustrip(dimensionalize(Δy/2/maximum(Vx), s, CharDim)))
                 @printf("fT = %2.4e\n", errT)
                 @printf("fV = %2.4e\n", errV)
+                @show (λminV, λmaxV)
+                @show (λminT, λmaxT)
                 @show (minimum(dimensionalize(Tc, C, CharDim)), maximum(dimensionalize(Tc, C, CharDim)))
                 if ( isnan(errT) || isnan(errV) ) error() end
                 ( errT < ϵ && errV < ϵ ) && break
