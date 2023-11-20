@@ -148,9 +148,9 @@ end
             @. Tc[2:end-1,2:end-1] .+= δT[2:end-1,2:end-1]
             
             if mod(iter, nout) == 0 
-                ResidualThermics2D!(KδT1, Tc,     Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0, T_South, T_North, transient )
+                ResidualThermics2D!(KδT1, Tc.+δT, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0, T_South, T_North, transient )
                 ResidualThermics2D!(KδT,  Tc.-δT, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0, T_South, T_North, transient )
-                λminT =  abs(sum(.-δT.*(KδT1.-KδT))/sum(δT.*M.*δT) / 1.0 )
+                λminT =  abs(sum(.-δT.*(KδT1.-KδT))/sum(δT.*M.*δT*2) / 1.0 )
 
                 λmaxT = GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, transient )*GershT                
                 hT   .= 2/sqrt(λmaxT)*CFL   

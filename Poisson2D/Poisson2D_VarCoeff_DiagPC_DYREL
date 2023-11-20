@@ -5,12 +5,41 @@ import LinearAlgebra:norm
 const cmy = 356.25*3600*24*100
 const ky  = 356.25*3600*24*1e3
 
-function GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, transient )
-    return maximum( (transient ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 .+ k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2) + k.y[:,1:end-1]/ρ/Cp/Δy^2 + k.y[:,2:end-0]/ρ/Cp/Δy^2 + k.x[1:end-1,:]/ρ/Cp/Δx^2 + k.x[2:end-0,:]/ρ/Cp/Δx^2)
+function GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, DM, transient )
+    return maximum( ((transient ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 .+ k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2) + k.y[:,1:end-1]/ρ/Cp/Δy^2 + k.y[:,2:end-0]/ρ/Cp/Δy^2 + k.x[1:end-1,:]/ρ/Cp/Δx^2 + k.x[2:end-0,:]/ρ/Cp/Δx^2)./DM[2:end-1,2:end-1] )
 end
 
-function GershgorinThermics2D_Local!( λmaxlocT, k, ρ, Cp, Δx, Δy, Δt, transient )
+function DiagThermics2D!( D, k, ρ, Cp, Δx, Δy, Δt, transient )
+    D[2:end-1,2:end-1] .= (transient ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 .+ k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2) 
+end
+
+function MinEigEst(k, ρ, Cp, Δx, Δy, Δt, transient)
+    cC = transient ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 + k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2
+    cS = -k.y[:,1:end-1]/ρ/Cp/Δy^2 
+    cN = -k.y[:,2:end-0]/ρ/Cp/Δy^2 
+    cW = -k.x[1:end-1,:]/ρ/Cp/Δx^2 
+    cE = -k.x[2:end-0,:]/ρ/Cp/Δx^2
+
+    n = length(cC)
+
+    p = 1
+    @show trA_n   = sum(cC[:])/n
+    @show sum(cC .- trA_n)
+
+    @show term  = sum((cC .- trA_n).^2) + sum(cE.^2) + sum(cN.^2) .+ sum(cS.^2) .+ sum(cW.^2) 
+    αp    = (((n-1)^(2p-1) / ((n-1)^(2p-1) + 1.0)) * term )^(1/2/p)
+    @show trA_n - αp
+
+    return
+end
+
+function TraceThermics2D( k, ρ, Cp, Δx, Δy, Δt, transient, A )
+    return sum( (transient ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 .+ k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2) .- A )
+end
+
+function GershgorinThermics2D_Local!( λmaxlocT, k, ρ, Cp, Δx, Δy, Δt, DM, transient )
     λmaxlocT .= ( (transient ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 .+ k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2) + k.y[:,1:end-1]/ρ/Cp/Δy^2 + k.y[:,2:end-0]/ρ/Cp/Δy^2 + k.x[1:end-1,:]/ρ/Cp/Δx^2 + k.x[2:end-0,:]/ρ/Cp/Δx^2)
+    λmaxlocT ./= DM[2:end-1,2:end-1]
 end
 
 @views function maxloc!(A2, A)
@@ -23,7 +52,7 @@ end
     A2[[1,end],:] .= A2[[2,end-1],:]; A2[:,[1,end]] .= A2[:,[2,end-1]]
 end
 
-@views function ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, rhs, T_South, T_North, transient )
+@views function ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, rhs, T_South, T_North, DM, transient )
     
     Tc[:,1]   .= -Tc[:,2]     .+ 2*T_South*rhs
     Tc[:,end] .= -Tc[:,end-1] .+ 2*T_North*rhs
@@ -37,9 +66,10 @@ end
     @. ∂T∂y        = (Tc[2:end-1,2:end] - Tc[2:end-1,1:end-1])/Δy
     @. qTy         = -k.y * ∂T∂y
     @. RT[2:end-1,2:end-1] = -transient*(Tc[2:end-1,2:end-1] - rhs*Tc0[2:end-1,2:end-1]) / Δt - 1.0/(ρ*Cp) * (qTx[2:end,:] - qTx[1:end-1,:])/Δx - 1.0/(ρ*Cp) * (qTy[:,2:end] - qTy[:,1:end-1])/Δy + rhs/(ρ*Cp) *  Qr[2:end-1,2:end-1]
+    @. RT                ./= DM
 end
 
-@views function MainPoisson2D()
+@views function MainPoisson2D(n, auto)
 
     # Unit system
     CharDim    = SI_units(length=1000m, temperature=1000C, stress=1e7Pa, viscosity=1e20Pas)
@@ -64,8 +94,8 @@ end
     T_South    = nondimensionalize(520C, CharDim)
 
     # Numerical parameters
-    Ncx        = 80
-    Ncy        = 80
+    Ncx        = n*20
+    Ncy        = n*20
     Nt         = 1
     Δx         = Lx/Ncx
     Δy         = Ly/Ncy
@@ -89,6 +119,9 @@ end
     KδT1       =   zeros(Ncx+2, Ncy+2)
     δT         =   zeros(Ncx+2, Ncy+2)
     KδT        =   zeros(Ncx+2, Ncy+2)
+
+    DM         =   ones(Ncx+2, Ncy+2)
+
     kv         = k0.*ones(Ncx+1, Ncy+1)
     r1         = nondimensionalize(2e3m, CharDim)
     kv[(xv.+r1).^2 .+ (yv'.-r1).^2 .< r1^2] .= 1000.
@@ -103,7 +136,8 @@ end
     k          = (x=0.5.*(kv[:,1:end-1] .+ kv[:,2:end-0]), y=0.5.*(kv[1:end-1,:] .+ kv[2:end-0,:]))
         
     # Local max preconditioning
-    ismaxloc   = true
+    PC         = true
+    ismaxloc   = false
     λmaxlocT   = zeros(Ncx+0, Ncy+0)
     kv_maxloc  = zeros(Ncx+1, Ncy+1)
     maxloc!(kv_maxloc, kv)
@@ -120,9 +154,10 @@ end
     niter  = 25000
     nout   = 10
     ϵ      = 1e-11
-    GershT = 1.0
-    cfact  = 1.0
+    CFL    = 0.99
+    cfact  = 0.95
 
+    iters = 0
     for it=1:Nt
         # History
         @. Tc0  = Tc
@@ -131,45 +166,49 @@ end
         t       += Δt 
 
         # DYREL
-        λmaxT = GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, transient )*GershT                
+        λmaxT = GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, DM, transient )              
+        λminT = 3.3e-5
         λminT = 1.0
 
-        CFL   = 0.99
         hT   .= 2.0./sqrt.(λmaxT)*CFL
-        cT    = 2*sqrt(λminT)*cfact
+        cT    = 2.0*sqrt(λminT)*cfact
 
         if ismaxloc
-            GershgorinThermics2D_Local!( λmaxlocT, k_maxloc, ρ, Cp, Δx, Δy, Δt, transient )*GershT
+            GershgorinThermics2D_Local!( λmaxlocT, k_maxloc, ρ, Cp, Δx, Δy, Δt, DM, transient )
             hT[2:end-1,2:end-1] .= 2.0./sqrt.(λmaxlocT)*CFL 
         end
 
-        iters = 0
+        # MinEigEst(k, ρ, Cp, Δx, Δy, Δt, transient)
+        if PC DiagThermics2D!( DM, k, ρ, Cp, Δx, Δy, Δt, transient ) end
+
         @views for iter=1:niter
             iters  += 1
 
             # Residuals
-            ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 1.0, T_South, T_North, transient )
+            ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 1.0, T_South, T_North, DM, transient )
 
             @. ∂T∂τ                  = (2-cT*hT)/(2+cT*hT)*∂T∂τ + 2*hT/(2+cT*hT)*RT
             @. δT                    = hT*∂T∂τ
             @. Tc[2:end-1,2:end-1] .+= δT[2:end-1,2:end-1]
-            
+
             if mod(iter, nout) == 0 
-                ResidualThermics2D!(KδT1, Tc    , Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0, T_South, T_North, transient )
-                ResidualThermics2D!(KδT,  Tc.-δT, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0, T_South, T_North, transient )
+                ResidualThermics2D!(KδT1, Tc    , Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0, T_South, T_North, DM, transient )
+                ResidualThermics2D!(KδT,  Tc.-δT, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 0.0, T_South, T_North, DM, transient )
                 λminT =  abs(sum(.-δT.*(KδT1.-KδT))/sum(δT.*δT) / 1.0 )
-                λmaxT = GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, transient )*GershT                
-                hT   .= 2/sqrt(λmaxT)*CFL 
-                cT    = 2*sqrt(λminT)*cfact
-                
-                if ismaxloc
-                    GershgorinThermics2D_Local!( λmaxlocT, k_maxloc, ρ, Cp, Δx, Δy, Δt, transient )*GershT
-                    hT[2:end-1,2:end-1]  .= 2.0./sqrt.(λmaxlocT)*CFL
+                λmaxT = GershgorinThermics2D( k, ρ, Cp, Δx, Δy, Δt, DM, transient )          
+                if auto
+                    hT   .= 2/sqrt(λmaxT)*CFL 
+                    cT    = 2*sqrt(λminT)*cfact
                 end
                 
-                ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 1.0, T_South, T_North, transient )
+                if ismaxloc
+                    GershgorinThermics2D_Local!( λmaxlocT, k_maxloc, ρ, Cp, Δx, Δy, Δt, DM, transient )
+                    hT[2:end-1,2:end-1]  .= 2.0./sqrt.(λmaxlocT)*CFL
+                end
+            
+                ResidualThermics2D!(RT, Tc, Tc0, Qr, Δt, ρ, Cp, k, Δx, Δy, ∂T∂x, ∂T∂y, qTx, qTy, 1.0, T_South, T_North, DM, transient )             
 
-                errT = norm(RT)/sqrt(length(RT))
+                errT = norm(RT.*DM)/sqrt(length(RT))
                 @printf("Iteration %05d --- Time step %4d --- Δt = %2.2e \n", iter, it, ustrip(dimensionalize(Δt, s, CharDim)))
                 @printf("fT = %2.4e\n", errT)
                 @show (λminT, λmaxT)
@@ -183,11 +222,19 @@ end
 
         # Visualisation
         if mod(it, 10)==0 || it==1
-            p1=heatmap(ustrip.(dimensionalize(xc, m, CharDim)./1e3), ustrip.(dimensionalize(yc, m, CharDim)./1e3), ustrip.(dimensionalize(Tc, C, CharDim))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0, color=:turbo  )
-            p2=heatmap(ustrip.(dimensionalize(xv, m, CharDim)./1e3), ustrip.(dimensionalize(yv, m, CharDim)./1e3), log10.(ustrip.(dimensionalize(kv, J/s/m/K, CharDim)))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0, color=:turbo  )
+            p1=heatmap(ustrip.(dimensionalize(xc, m, CharDim)./1e3), ustrip.(dimensionalize(yc, m, CharDim)./1e3), ustrip.(dimensionalize(Tc, C, CharDim))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0, color=:turbo )
+            p2=heatmap(ustrip.(dimensionalize(xv, m, CharDim)./1e3), ustrip.(dimensionalize(yv, m, CharDim)./1e3), log10.(ustrip.(dimensionalize(kv, J/s/m/K, CharDim)))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0, color=:turbo )
             display(plot(p1,p2))
         end
     end
+    return iters
 end
 
-MainPoisson2D()
+# MainPoisson2D(1, true)
+# MainPoisson2D(2, true)
+# MainPoisson2D(4, true)
+# MainPoisson2D(8, true)
+# MainPoisson2D(16, true)|
+# [6340 9120 10700 12070 14830]
+
+MainPoisson2D(4, true)
