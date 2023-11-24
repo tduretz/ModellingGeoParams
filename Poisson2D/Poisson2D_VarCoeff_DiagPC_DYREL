@@ -13,24 +13,23 @@ function DiagThermics2D!( D, k, ρ, Cp, Δx, Δy, Δt, transient )
     D[2:end-1,2:end-1] .= (transient ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 .+ k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2) 
 end
 
-function MinEigEst(k, ρ, Cp, Δx, Δy, Δt, transient)
+function ConstructM(k, ρ, Cp, Δx, Δy, Δt, transient, b, T_South, T_North)
+    Ncx, Ncy = size(b, 1), size(b, 2)
     cC = transient ./ Δt .+ k.y[:,1:end-1]/ρ/Cp/Δy^2 + k.y[:,2:end-0]/ρ/Cp/Δy^2 .+ k.x[1:end-1,:]/ρ/Cp/Δx^2 .+ k.x[2:end-0,:]/ρ/Cp/Δx^2
-    cS = -k.y[:,1:end-1]/ρ/Cp/Δy^2 
-    cN = -k.y[:,2:end-0]/ρ/Cp/Δy^2 
-    cW = -k.x[1:end-1,:]/ρ/Cp/Δx^2 
-    cE = -k.x[2:end-0,:]/ρ/Cp/Δx^2
-
-    n = length(cC)
-
-    p = 1
-    @show trA_n   = sum(cC[:])/n
-    @show sum(cC .- trA_n)
-
-    @show term  = sum((cC .- trA_n).^2) + sum(cE.^2) + sum(cN.^2) .+ sum(cS.^2) .+ sum(cW.^2) 
-    αp    = (((n-1)^(2p-1) / ((n-1)^(2p-1) + 1.0)) * term )^(1/2/p)
-    @show trA_n - αp
-
-    return
+    cS = -k.y[:,1:end-1]/ρ/Cp/Δy^2; cC[:,  1] -= cS[:,  1]; b[:,  1] .-= 2*T_South.*cS[:,  1]; cS[:,  1] .= 0.
+    cN = -k.y[:,2:end-0]/ρ/Cp/Δy^2; cC[:,end] -= cN[:,end]; b[:,end] .-= 2*T_North.*cN[:,end]; cN[:,end] .= 0. 
+    cW = -k.x[1:end-1,:]/ρ/Cp/Δx^2; cC[  1,:] += cW[  1,:]; cW[  1,:] .= 0. 
+    cE = -k.x[2:end-0,:]/ρ/Cp/Δx^2; cC[end,:] += cE[end,:]; cE[end,:] .= 0.
+    num = reshape(1:Ncx*Ncy, Ncx, Ncy)
+    iC  = num
+    iW  = ones(Ncx, Ncy); iW[2:end-0,:] .= num[1:end-1,:]
+    iE  = ones(Ncx, Ncy); iE[1:end-1,:] .= num[2:end-0,:]
+    iS  = ones(Ncx, Ncy); iS[:,2:end-0] .= num[:,1:end-1]
+    iN  = ones(Ncx, Ncy); iN[:,1:end-1] .= num[:,2:end-0]
+    VM   = [cC[:]; cW[:]; cE[:]; cS[:]; cN[:]]
+    IM   = [iC[:]; iC[:]; iC[:]; iC[:]; iC[:]]
+    JM   = [iC[:]; iW[:]; iE[:]; iS[:]; iN[:]]
+    return sparse(IM, JM, VM)
 end
 
 function TraceThermics2D( k, ρ, Cp, Δx, Δy, Δt, transient, A )
@@ -90,8 +89,11 @@ end
     transient  = 0
 
     # BCs
-    T_North    = nondimensionalize(500C, CharDim)
-    T_South    = nondimensionalize(520C, CharDim)
+    # T_North    = nondimensionalize(500C, CharDim)
+    # T_South    = nondimensionalize(520C, CharDim)
+    T_North    = nondimensionalize(0C, CharDim)
+    T_South    = nondimensionalize(0C, CharDim)
+
 
     # Numerical parameters
     Ncx        = n*20
@@ -157,6 +159,12 @@ end
     CFL    = 0.99
     cfact  = 0.95
 
+    # Direct solution
+    b    = zeros(Ncx,Ncy)
+    b   .= Qr[2:end-1,2:end-1]/ρ/Cp
+    M    = ConstructM(k, ρ, Cp, Δx, Δy, Δt, transient, b, T_South, T_North)
+    Tdir = (M\b[:])
+
     iters = 0
     for it=1:Nt
         # History
@@ -178,9 +186,10 @@ end
             hT[2:end-1,2:end-1] .= 2.0./sqrt.(λmaxlocT)*CFL 
         end
 
-        # MinEigEst(k, ρ, Cp, Δx, Δy, Δt, transient)
-        if PC DiagThermics2D!( DM, k, ρ, Cp, Δx, Δy, Δt, transient ) end
-
+        if PC 
+            DiagThermics2D!( DM, k, ρ, Cp, Δx, Δy, Δt, transient ) 
+            # DM[2:end-1,2:end-1] .= reshape(diag(M), Ncx, Ncy)
+        end
         @views for iter=1:niter
             iters  += 1
 
@@ -222,12 +231,15 @@ end
 
         # Visualisation
         if mod(it, 10)==0 || it==1
+
+            @show mean(Tdir)
+            p0=heatmap(ustrip.(dimensionalize(xc[2:end-1], m, CharDim)./1e3), ustrip.(dimensionalize(yc[2:end-1], m, CharDim)./1e3), ustrip.(dimensionalize(reshape(Tdir, Ncx, Ncy), C, CharDim))', title = "Direct solution", aspect_ratio=1.0, color=:turbo )
             p1=heatmap(ustrip.(dimensionalize(xc, m, CharDim)./1e3), ustrip.(dimensionalize(yc, m, CharDim)./1e3), ustrip.(dimensionalize(Tc, C, CharDim))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0, color=:turbo )
             p2=heatmap(ustrip.(dimensionalize(xv, m, CharDim)./1e3), ustrip.(dimensionalize(yv, m, CharDim)./1e3), log10.(ustrip.(dimensionalize(kv, J/s/m/K, CharDim)))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0, color=:turbo )
-            display(plot(p1,p2))
+            display(plot(p0,p1,p2))
         end
     end
-    return iters
+    # return iters
 end
 
 # MainPoisson2D(1, true)
