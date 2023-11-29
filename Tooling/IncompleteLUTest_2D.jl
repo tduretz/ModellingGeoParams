@@ -129,6 +129,40 @@ function ILU_v2(coeff, nit)
     return (cS=pS, cW=pW, cC=pC, cE=pE, cN=pN)
 end
 
+function ILU_v3(coeff, nit)
+    # M2Di style storage
+    pC = copy(coeff.cC); pC0 = copy(coeff.cC)
+    pS = copy(coeff.cS);
+    pN = copy(coeff.cN);
+    pW = copy(coeff.cW);  
+    pE = copy(coeff.cE);
+
+    # Iterations over coefficients
+    for iter=1:nit
+
+        # println("ILU iter $iter --- v3")
+        pC0 .= pC
+        
+        pS[:,2:end-0] .=  1.0./pC[:,1:end-1] .* (coeff.cS[:,2:end-0])
+        pN[:,1:end-1] .=                         (coeff.cN[:,1:end-1])
+
+        pW[2:end-0,:] .=  1.0./pC[1:end-1,:] .* (coeff.cW[2:end-0,:])
+        pE[1:end-1,:] .=                         (coeff.cE[1:end-1,:])
+        
+        pC .=  coeff.cC
+        # Central coefficient E/W
+        pC[2:end-0,:] .-= pW[2:end-0,:].*pE[1:end-1,:]
+        # Central coefficient N/S
+        pC[:,2:end-0] .-= pS[:,2:end-0].*pN[:,1:end-1]
+
+        if norm(pC.-pC0)/length(pC) <1e-8
+            @info "ILU iter v3 converged in $iter sweeps"
+            break
+        end 
+    end
+    return (cS=pS, cW=pW, cC=pC, cE=pE, cN=pN)
+end
+
 function ForwardBackwardSolve!(T2D, b, pc, nit, tol, Ncx=size(T2D,1), Ncy=size(T2D,2))
     r2D = zeros(size(T2D)) # temp array
     for iter=1:nit
