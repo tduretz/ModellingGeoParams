@@ -129,38 +129,18 @@ function ILU_v2(coeff, nit)
     return (cS=pS, cW=pW, cC=pC, cE=pE, cN=pN)
 end
 
-function ILU_v3(coeff, nit)
-    # M2Di style storage
-    pC = copy(coeff.cC); pC0 = copy(coeff.cC)
-    pS = copy(coeff.cS); 
-    pN = copy(coeff.cN); 
-    pW = copy(coeff.cW);   
-    pE = copy(coeff.cE); 
-
-    # Iterations over coefficients
+function ForwardBackwardSolve!(T2D, b, pc, nit, tol, Ncx=size(T2D,1), Ncy=size(T2D,2))
+    r2D = zeros(size(T2D)) # temp array
     for iter=1:nit
-
-        # println("ILU iter $iter --- v3")
-        pC0 .= pC
-        
-        pS[:,2:end-0] .=  1.0./pC[:,1:end-1] .* (coeff.cS[:,2:end-0])
-        pN[:,1:end-1] .=                        (coeff.cN[:,1:end-1])
-
-        pW[2:end-0,:] .=  1.0./pC[1:end-1,:] .* (coeff.cW[2:end-0,:])
-        pE[1:end-1,:] .=                        (coeff.cE[1:end-1,:])
-        
-        pC .=  coeff.cC
-        # Central coefficient E/W
-        pC[2:end-0,:] .-= pW[2:end-0,:].*pE[1:end-1,:]
-        # Central coefficient N/S
-        pC[:,2:end-0] .-= pS[:,2:end-0].*pN[:,1:end-1]
-
-        if norm(pC.-pC0)/length(pC) <1e-8
-            @info "ILU iter v3 converged in $iter sweeps"
-            break
-        end 
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            if i>1   rW = r2D[i-1,j] else rW = 0. end
+            if i<Ncx TE = T2D[i+1,j] else TE = 0. end
+            if j>1   rS = r2D[i,j-1] else rS = 0. end
+            if j<Ncy TN = T2D[i,j+1] else TN = 0. end
+            r2D[i,j] +=                      -pc.cW[i,j]*rW - pc.cS[i,j]*rS +   b[i,j]  - r2D[i,j] 
+            T2D[i,j] +=  (1.0/pc.cC[i,j]) * (-pc.cE[i,j]*TE - pc.cN[i,j]*TN  + r2D[i,j]) - T2D[i,j]
+        end
     end
-    return (cS=pS, cW=pW, cC=pC, cE=pE, cN=pN)
 end
 
 #####################################################################################
@@ -424,17 +404,8 @@ function main()
     @show norm(Tilu .- Tdir)/length(Tdir)
     @info "Step 2 --- iterative L\b solve using coefficients from Chow & Patel, 2015"
     T2D = zeros(Ncx, Ncy)
-    r2D = zeros(Ncx, Ncy)
-    for iter=1:nit
-        for j in axes(T2D, 2), i in axes(T2D, 1) 
-            if i>1   rW = r2D[i-1,j] else rW = 0. end
-            if i<Ncx TE = T2D[i+1,j] else TE = 0. end
-            if j>1   rS = r2D[i,j-1] else rS = 0. end
-            if j<Ncy TN = T2D[i,j+1] else TN = 0. end
-            r2D[i,j] +=                      -pc.cW[i,j]*rW - pc.cS[i,j]*rS +   b[i,j]  - r2D[i,j] 
-            T2D[i,j] +=  (1.0/pc.cC[i,j]) * (-pc.cE[i,j]*TE - pc.cN[i,j]*TN  + r2D[i,j]) - T2D[i,j]
-        end
-    end
+
+    ForwardBackwardSolve!(T2D, reshape(b, Ncx, Ncy), pc, nit, tol)
     @show norm(T2D[:] .- Tdir)/length(Tdir)
     @info "End"
     
