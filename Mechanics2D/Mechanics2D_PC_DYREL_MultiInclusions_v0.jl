@@ -9,6 +9,7 @@ include("AssembleKuu.jl")
 const cmy = 356.25*3600*24*100
 const ky  = 356.25*3600*24*1e3
 
+```Function from T. James - https://apps.dtic.mil/sti/trecms/pdf/AD1184946.pdf```
 function run_incomplete_cholesky3(A, n = size(A, 1)) 
     Anz = nonzeros(A)
     #incomplete cholesky
