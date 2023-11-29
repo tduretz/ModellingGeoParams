@@ -197,8 +197,8 @@ end
     niter  = 1e5
     nout   = 500
     ϵ      = 1e-6
-    CFL    = 0.999
-    cfact  = 0.95
+    CFL    = 0.999*1.2
+    cfact  = 0.95*4
 
     PC       = true
     ismaxloc = false
@@ -238,17 +238,37 @@ end
         @time @views for iter=1:niter
             iters  += 1
 
+            # Reds
+
             # Residuals
             ResidualMomentumX!(Rx, Vx, Vy, Pt, bx, ε̇xx, ε̇xy, ∇v, ηc, ηb, ηv, Dx, τxx, τxy, Δx, Δy, 1.0)
             ResidualMomentumY!(Ry, Vx, Vy, Pt, by, ε̇yy, ε̇xy, ∇v, ηc, ηb, ηv, Dy, τyy, τxy, Δx, Δy, 1.0)
             
             @. ∂Vx∂τ                 = (2-c*hVx)/(2+c*hVx)*∂Vx∂τ + 2*hVx/(2+c*hVx).*Rx
             @. δVx                   = hVx*∂Vx∂τ
-            @. Vx[2:end-1,2:end-1]  += δVx[2:end-1,2:end-1]
+            @. Vx[2:2:end-1,2:2:end-1] += δVx[2:2:end-1,2:2:end-1]
+            @. Vx[3:2:end-2,3:2:end-1] += δVx[3:2:end-2,3:2:end-1]
 
             @. ∂Vy∂τ                 = (2-c*hVy)/(2+c*hVy)*∂Vy∂τ + 2*hVy/(2+c*hVy).*Ry
             @. δVy                   = hVy*∂Vy∂τ
-            @. Vy[2:end-1,2:end-1]  += δVy[2:end-1,2:end-1]
+            @. Vy[2:2:end-1,2:2:end-1] += δVy[2:2:end-1,2:2:end-1]
+            @. Vy[3:2:end-1,3:2:end-1] += δVy[3:2:end-1,3:2:end-1]
+
+            # Blacks
+
+            # Residuals
+            ResidualMomentumX!(Rx, Vx, Vy, Pt, bx, ε̇xx, ε̇xy, ∇v, ηc, ηb, ηv, Dx, τxx, τxy, Δx, Δy, 1.0)
+            ResidualMomentumY!(Ry, Vx, Vy, Pt, by, ε̇yy, ε̇xy, ∇v, ηc, ηb, ηv, Dy, τyy, τxy, Δx, Δy, 1.0)
+            
+            @. ∂Vx∂τ                 = (2-c*hVx)/(2+c*hVx)*∂Vx∂τ + 2*hVx/(2+c*hVx).*Rx
+            @. δVx                   = hVx*∂Vx∂τ
+            @. Vx[2:2:end-1,3:2:end-1] += δVx[2:2:end-1,3:2:end-1]
+            @. Vx[3:2:end-2,2:2:end-1] += δVx[3:2:end-2,2:2:end-1]
+
+            @. ∂Vy∂τ                 = (2-c*hVy)/(2+c*hVy)*∂Vy∂τ + 2*hVy/(2+c*hVy).*Ry
+            @. δVy                   = hVy*∂Vy∂τ
+            @. Vy[2:2:end-1,3:2:end-1] += δVy[2:2:end-1,3:2:end-1]
+            @. Vy[3:2:end-1,2:2:end-1] += δVy[3:2:end-1,2:2:end-1]
             
             if mod(iter, nout) == 0 || iter==1
 
