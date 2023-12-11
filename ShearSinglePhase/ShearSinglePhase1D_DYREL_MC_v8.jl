@@ -184,7 +184,7 @@ function main()
     #σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe A - Vermeer
     σxxB       = nondimensionalize(-400e3Pa, CharDim) # Courbe B - Vermeer
     σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe B - Vermeer
-    σzzB       = 0
+    σzzB       = σxxB
     PB         = -(σxxB + σyyB + σzzB)/3.0
     τxxB       = PB + σxxB
     τyyB       = PB + σyyB
@@ -206,7 +206,7 @@ function main()
         ϕ          = 40.0*π/180.,
         ψ          = 10.0*π/180.,    
         θt         = 25.0*π/180.,
-        ηvp        = nondimensionalize(2*1e11Pa*s, CharDim),
+        ηvp        = nondimensionalize(1*1e10Pa*s, CharDim),
     )
     
     # Numerical parameters
@@ -360,9 +360,7 @@ function main()
         probes.ẆB[it]         = τ.xy[end]*ε̇.xy[end]
         probes.τxyB[it]       = τ.xy[end]
         probes.VxB[it]        = 0.5*(V.x[end] + V.x[end-1])
-        @show probes.σyyB[it] = τ.yy[end] - Pt[end]
-
-        
+        probes.σyyB[it] = τ.yy[end] - Pt[end]
 
         PrincipalStress!(σ3, τ, Pt)
         theta = ustrip.(atand.(σ3.z[:] ./ σ3.x[:]))
@@ -388,7 +386,6 @@ function main()
             p4=plot!((1:it)*ε0*Δt, app_fric_theo, label="theoritical", title=@sprintf("max = %1.4f", maximum(app_fric_theo)) )
             # p4=plot!((1:it)*ε0*Δt, ustrip.(dimensionalize(-probes.σyy0[1:it], Pa, CharDim))/1e3, label="σyyBC" )
             display(plot(p1,p2,p3,p4))
-            @show app_fric_theo
         end
     end
     @show iters

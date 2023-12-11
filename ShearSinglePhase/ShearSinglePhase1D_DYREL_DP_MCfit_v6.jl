@@ -114,7 +114,7 @@ function main()
     # σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe A - Vermeer
     σxxB       = nondimensionalize(-400e3Pa, CharDim) # Courbe B - Vermeer
     σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe B - Vermeer
-    σzzB       = 0
+    σzzB       = σxxB
     PB         = -(σxxB + σyyB + σzzB)/3.0
     τxxB       = PB + σxxB
     τyyB       = PB + σyyB
@@ -130,7 +130,7 @@ function main()
     G          = E/2.0/(1+ν)
     Kbulk      = E/3.0/(1-2ν) 
     μs         = nondimensionalize(1e52Pa*s, CharDim)
-    MCfit      = :extension  # :compression, :extension or :inscribed (https://www.researchgate.net/publication/267787500_Measuring_discrepancies_between_Coulomb_and_other_geotechnical_criteria_Drucker-Prager_and_Matsuoka-Nakai)
+    MCfit      = :inscribed  # :compression, :extension or :inscribed (https://www.researchgate.net/publication/267787500_Measuring_discrepancies_between_Coulomb_and_other_geotechnical_criteria_Drucker-Prager_and_Matsuoka-Nakai)
     MC         = ( 
         Coh0       = nondimensionalize(0.0Pa, CharDim),
         ϕ          = 40.0*π/180.,

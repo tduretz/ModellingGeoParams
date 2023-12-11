@@ -173,7 +173,7 @@ function main()
     #σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe A - Vermeer
     σxxB       = nondimensionalize(-400e3Pa, CharDim) # Courbe B - Vermeer
     σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe B - Vermeer
-    σzzB       = 0
+    σzzB       = σzzB
     PB         = -(σxxB + σyyB + σzzB)/3.0
     τxxB       = PB + σxxB
     τyyB       = PB + σyyB
