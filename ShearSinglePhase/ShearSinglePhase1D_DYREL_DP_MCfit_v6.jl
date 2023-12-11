@@ -110,8 +110,8 @@ function main()
     CharDim    = SI_units(length=1000m, temperature=1000C, stress=1e7Pa, viscosity=1e15Pas)
 
     # Physical parameters
-    #σxxB       = nondimensionalize( -25e3Pa, CharDim) # Courbe A - Vermeer
-    #σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe A - Vermeer
+    # σxxB       = nondimensionalize( -25e3Pa, CharDim) # Courbe A - Vermeer
+    # σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe A - Vermeer
     σxxB       = nondimensionalize(-400e3Pa, CharDim) # Courbe B - Vermeer
     σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe B - Vermeer
     σzzB       = 0
@@ -130,16 +130,36 @@ function main()
     G          = E/2.0/(1+ν)
     Kbulk      = E/3.0/(1-2ν) 
     μs         = nondimensionalize(1e52Pa*s, CharDim)
-    yield      = ( 
+    MCfit      = :extension  # :compression, :extension or :inscribed (https://www.researchgate.net/publication/267787500_Measuring_discrepancies_between_Coulomb_and_other_geotechnical_criteria_Drucker-Prager_and_Matsuoka-Nakai)
+    MC         = ( 
         Coh0       = nondimensionalize(0.0Pa, CharDim),
         ϕ          = 40.0*π/180.,
         ψ          = 10.0*π/180.,  
-        ηvp        = nondimensionalize(2*1e11Pa*s, CharDim),
+        ηvp        = nondimensionalize(1e10Pa*s, CharDim),
+    )
+    if MCfit == :compression
+        θ = π/6
+        α = 2*sin(MC.ϕ) / (sqrt(3)*(3 - sin(MC.ϕ)))
+        β = 2*sin(MC.ψ) / (sqrt(3)*(3 - sin(MC.ψ)))
+    elseif MCfit == :extension
+        θ = -π/6
+        α = 2*sin(MC.ϕ) / (sqrt(3)*(3 + sin(MC.ϕ)))
+        β = 2*sin(MC.ψ) / (sqrt(3)*(3 + sin(MC.ψ)))
+    elseif MCfit == :inscribed
+        α = 1*sin(MC.ϕ) / (sqrt(3)*sqrt(3 + sin(MC.ϕ))^2)
+        β = 1*sin(MC.ψ) / (sqrt(3)*sqrt(3 + sin(MC.ψ))^2)
+    end
+    H = MC.Coh0/tan(MC.ϕ)
+    yield = (
+        Coh0       = 3*α*H,
+        ϕ          = 3*α,
+        ψ          = 3*β,  
+        ηvp        = MC.ηvp,  
     )
     
     # Numerical parameters
     Ncy        = 100
-    Nt         = 1000
+    Nt         = 3000
     Δy         = Ly/Ncy
     yc         = LinRange(-Ly/2-Δy/2, Ly/2+Δy/2, Ncy+2)
     yv         = LinRange(-Ly/2,      Ly/2,      Ncy+1)
