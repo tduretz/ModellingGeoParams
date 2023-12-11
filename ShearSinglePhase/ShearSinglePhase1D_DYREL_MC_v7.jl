@@ -97,44 +97,6 @@ function Fλ(λ̇, ∂Q∂τ, ϕ, ψ, c, θt, ηvp, ηve, ηe, Kb, Δt, τxx0, �
     return F
 end
 
-# @inline @views function Rheology!(τ, Pt, ε̇, ∇v, τ0, Pt0, Δt, arrays, yield, rel, NL)
-    
-#     Coh, ϕ, ψ, ηvp = yield
-#     Kb, ηe, ηve, ηvep, F, Fc, λ̇, λ̇rel, ispl = arrays
-    
-#     # Stress
-#     @. τ.xy     =  2 * ηve * (ε̇.xy + τ0.xy/2/ηe) 
-#     @. τ.yy     =  2 * ηve * (ε̇.yy + τ0.yy/2/ηe) 
-#     @. τ.xx     =  2 * ηve * (0.0  + τ0.xx/2/ηe)
-#     @. τ.zz     =  2 * ηve * (0.0  + τ0.zz/2/ηe)
-#     @. τ.II     = sqrt(τ.xy.^2 + 0.5*(τ.yy.^2 + τ.xx.^2 + τ.zz.^2))
-#     @. Pt       = Pt0 - Kb*Δt*∇v.tot
-
-#     if NL
-#         # Plasticity
-#         @. ηvep = ηve
-#         @. F    = τ.II - Coh*cos(ϕ) - Pt*sin(ϕ)
-
-#         for pl in axes(F,1)
-#             λ̇[pl] = 0.0
-#             ε̇.IIᵉᶠᶠ[pl]   = sqrt( (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl])^2 + 0.5*( (0.0 + τ0.xx[pl]/2/ηe[pl])^2 + ((ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl])).^2 + ((0.0 + τ0.zz[pl]/2/ηe[pl])).^2 ) ) 
-#             if F[pl] > 0.
-#                 ispl[pl]  = 1
-#                 λ̇[pl]     = F[pl] / (ηvp + ηve[pl] + Kb[pl]*Δt*sin(ϕ)*sin(ψ))
-#                 λ̇rel[pl]  = (1.0-rel)*λ̇rel[pl] + rel*λ̇[pl]   
-#                 Pt[pl]   +=  Kb[pl]*Δt*sin(ψ)*λ̇rel[pl]
-#                 τ.xy[pl]  =  2 * ηve[pl] * (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl] - τ.xy[pl]/τ.II[pl]/2*λ̇rel[pl] ) 
-#                 τ.yy[pl]  =  2 * ηve[pl] * (ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl] - τ.yy[pl]/τ.II[pl]/2*λ̇rel[pl] )
-#                 τ.xx[pl]  =  2 * ηve[pl] * (0.0      + τ0.xx[pl]/2/ηe[pl] - τ.xx[pl]/τ.II[pl]/2*λ̇rel[pl] )
-#                 τ.zz[pl]  =  2 * ηve[pl] * (0.0      + τ0.zz[pl]/2/ηe[pl] - τ.zz[pl]/τ.II[pl]/2*λ̇rel[pl] )
-#                 τ.II[pl]  = sqrt(τ.xy[pl]^2 + 0.5*(τ.yy[pl]^2 + τ.xx[pl]^2 + τ.zz[pl]^2))
-#                 ηvep[pl] = τ.II[pl] / 2.0 / ε̇.IIᵉᶠᶠ[pl]
-#                 Fc[pl]   = τ.II[pl] - Coh[pl]*cos(ϕ) - Pt[pl]*sin(ϕ) - ηvp*λ̇rel[pl]
-#             end
-#         end
-#     end
-# end
-
 @inline @views function Rheology!(τ, Pt, ε̇, ∇v, τ0, Pt0, Δt, arrays, yield, rel, NL)
     
     type, Coh, ϕ, ψ, θt, ηvp = yield
@@ -227,15 +189,9 @@ function main()
     G          = E/2.0/(1+ν)
     Kbulk      = E/3.0/(1-2ν) 
     μs         = nondimensionalize(1e52Pa*s, CharDim)
-    # yield      = ( 
-    #     Coh0       = nondimensionalize(0.0Pa, CharDim),
-    #     ϕ          = 40.0*π/180.,
-    #     ψ          = 10.0*π/180.,  
-    #     ηvp        = nondimensionalize(2*1e11Pa*s, CharDim),
-    # )
     yield      = ( 
-        type       = :MC, # :DP or :MC
-        Coh0       = nondimensionalize(1e5Pa, CharDim),
+        type       = :DP, # :DP or :MC
+        Coh0       = nondimensionalize(0*1e5Pa, CharDim),
         ϕ          = 40.0*π/180.,
         ψ          = 10.0*π/180.,    
         θt         = 25.0*π/180.,
