@@ -1,4 +1,4 @@
-using GeoParams, Plots, Printf, MathTeXEngine, BenchmarkTools, LinearAlgebra, StaticArrays
+using GeoParams, Plots, Printf, MathTeXEngine, BenchmarkTools, LinearAlgebra, StaticArrays, ForwardDiff
 import LinearAlgebra:norm
 # Makie.update_theme!(fonts = (regular = texfont(), bold = texfont(:bold), italic = texfont(:italic)))
 
@@ -66,40 +66,137 @@ end
     @. ∇v.tot   = (V.y[2:end] - V.y[1:end-1])/Δy
 end
 
+Lode(τII, J3) = -3.0*sqrt(3.0)/2.0*J3/τII^3
+
+function Yield_MCAS95(τ, P, ϕ, c, θt, ηvp, λ̇ )
+    τII = sqrt(0.5*(τ[1]^2 + τ[2]^2 + τ[3]^2) + τ[4]^2)
+    J3  = τ[1]*τ[2]*τ[3] + τ[3]*τ[4]^2 # + 2*τ[4]*τ[5]*τ[6] + τ[1]*τ[6]^2 + τ[2]*τ[5]^2
+    L   = Lode(τII,J3)
+    L> 1.0 ? L= 1.0 : nothing
+    L<-1.0 ? L=-1.0 : nothing
+    θ   =  1.0/3.0*asin(L)
+    if abs(θ)>θt
+        sgnθ = sign(θ)
+        A = 1/3*cos(θt)*(3+tan(θt)*tan(3*θt) + 1/sqrt(3)*sgnθ*(tan(3*θt)-3*tan(θt))*sin(ϕ))
+        B = 1/(3*cos(3*θt))*(sgnθ*sin(θt) + 1/sqrt(3)*sin(ϕ)*cos(θt))
+        k = A - B*sin(3*θ)
+    else
+        k   = cos(θ) - 1/sqrt(3)*sin(ϕ)*sin(θ)
+    end
+    F   = k*τII - P*sin(ϕ) - c*cos(ϕ) - ηvp*λ̇
+    return F
+end
+
+function Fλ(λ̇, ∂Q∂τ, ϕ, ψ, c, θt, ηvp, ηve, ηe, Kb, Δt, τxx0, τyy0, τzz0, τxy0, P0, ε̇xx, ε̇yy, ε̇zz, ε̇xy, ∇v)
+    τxx  =  2 * ηve * (0.0 + τxx0/2/ηe - λ̇*∂Q∂τ[1])
+    τyy  =  2 * ηve * (ε̇yy + τyy0/2/ηe - λ̇*∂Q∂τ[2]) 
+    τzz  =  2 * ηve * (0.0 + τzz0/2/ηe - λ̇*∂Q∂τ[3])
+    τxy  =  2 * ηve * (ε̇xy + τxy0/2/ηe - λ̇*∂Q∂τ[4]) 
+    P    = P0 - Kb*Δt*(∇v - λ̇*sin(ψ))
+    F    = Yield_MCAS95([τxx; τyy; τzz; τxy], P, ϕ, c, θt, ηvp, λ̇ )
+    return F
+end
+
+# @inline @views function Rheology!(τ, Pt, ε̇, ∇v, τ0, Pt0, Δt, arrays, yield, rel, NL)
+    
+#     Coh, ϕ, ψ, ηvp = yield
+#     Kb, ηe, ηve, ηvep, F, Fc, λ̇, λ̇rel, ispl = arrays
+    
+#     # Stress
+#     @. τ.xy     =  2 * ηve * (ε̇.xy + τ0.xy/2/ηe) 
+#     @. τ.yy     =  2 * ηve * (ε̇.yy + τ0.yy/2/ηe) 
+#     @. τ.xx     =  2 * ηve * (0.0  + τ0.xx/2/ηe)
+#     @. τ.zz     =  2 * ηve * (0.0  + τ0.zz/2/ηe)
+#     @. τ.II     = sqrt(τ.xy.^2 + 0.5*(τ.yy.^2 + τ.xx.^2 + τ.zz.^2))
+#     @. Pt       = Pt0 - Kb*Δt*∇v.tot
+
+#     if NL
+#         # Plasticity
+#         @. ηvep = ηve
+#         @. F    = τ.II - Coh*cos(ϕ) - Pt*sin(ϕ)
+
+#         for pl in axes(F,1)
+#             λ̇[pl] = 0.0
+#             ε̇.IIᵉᶠᶠ[pl]   = sqrt( (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl])^2 + 0.5*( (0.0 + τ0.xx[pl]/2/ηe[pl])^2 + ((ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl])).^2 + ((0.0 + τ0.zz[pl]/2/ηe[pl])).^2 ) ) 
+#             if F[pl] > 0.
+#                 ispl[pl]  = 1
+#                 λ̇[pl]     = F[pl] / (ηvp + ηve[pl] + Kb[pl]*Δt*sin(ϕ)*sin(ψ))
+#                 λ̇rel[pl]  = (1.0-rel)*λ̇rel[pl] + rel*λ̇[pl]   
+#                 Pt[pl]   +=  Kb[pl]*Δt*sin(ψ)*λ̇rel[pl]
+#                 τ.xy[pl]  =  2 * ηve[pl] * (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl] - τ.xy[pl]/τ.II[pl]/2*λ̇rel[pl] ) 
+#                 τ.yy[pl]  =  2 * ηve[pl] * (ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl] - τ.yy[pl]/τ.II[pl]/2*λ̇rel[pl] )
+#                 τ.xx[pl]  =  2 * ηve[pl] * (0.0      + τ0.xx[pl]/2/ηe[pl] - τ.xx[pl]/τ.II[pl]/2*λ̇rel[pl] )
+#                 τ.zz[pl]  =  2 * ηve[pl] * (0.0      + τ0.zz[pl]/2/ηe[pl] - τ.zz[pl]/τ.II[pl]/2*λ̇rel[pl] )
+#                 τ.II[pl]  = sqrt(τ.xy[pl]^2 + 0.5*(τ.yy[pl]^2 + τ.xx[pl]^2 + τ.zz[pl]^2))
+#                 ηvep[pl] = τ.II[pl] / 2.0 / ε̇.IIᵉᶠᶠ[pl]
+#                 Fc[pl]   = τ.II[pl] - Coh[pl]*cos(ϕ) - Pt[pl]*sin(ϕ) - ηvp*λ̇rel[pl]
+#             end
+#         end
+#     end
+# end
+
 @inline @views function Rheology!(τ, Pt, ε̇, ∇v, τ0, Pt0, Δt, arrays, yield, rel, NL)
     
-    Coh, ϕ, ψ, ηvp = yield
+    type, Coh, ϕ, ψ, θt, ηvp = yield
     Kb, ηe, ηve, ηvep, F, Fc, λ̇, λ̇rel, ispl = arrays
-    
+
+    α    = LinRange(0.1, 1.0, 5)
+    Fmin = zero(α)
+
     # Stress
-    @. τ.xy     =  2 * ηve * (ε̇.xy + τ0.xy/2/ηe) 
-    @. τ.yy     =  2 * ηve * (ε̇.yy + τ0.yy/2/ηe) 
     @. τ.xx     =  2 * ηve * (0.0  + τ0.xx/2/ηe)
+    @. τ.yy     =  2 * ηve * (ε̇.yy + τ0.yy/2/ηe) 
     @. τ.zz     =  2 * ηve * (0.0  + τ0.zz/2/ηe)
+    @. τ.xy     =  2 * ηve * (ε̇.xy + τ0.xy/2/ηe) 
     @. τ.II     = sqrt(τ.xy.^2 + 0.5*(τ.yy.^2 + τ.xx.^2 + τ.zz.^2))
     @. Pt       = Pt0 - Kb*Δt*∇v.tot
+    @. ηvep     = ηve
 
-    if NL
-        # Plasticity
-        @. ηvep = ηve
+    if type==:MC
+        for i in eachindex(F)
+            F[i] = Yield_MCAS95( [τ.xx[i]; τ.yy[i]; τ.zz[i]; τ.xy[i]], Pt[i], ϕ, Coh[i], θt, ηvp, 0.0 )
+        end
+    else
         @. F    = τ.II - Coh*cos(ϕ) - Pt*sin(ϕ)
+    end
 
-        for pl in axes(F,1)
+    for pl in axes(F,1)
+        λ̇[pl]       = 0.0
+        ε̇.IIᵉᶠᶠ[pl] = sqrt( (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl])^2 + 0.5*( (0.0 + τ0.xx[pl]/2/ηe[pl])^2 + ((ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl])).^2 + ((0.0 + τ0.zz[pl]/2/ηe[pl])).^2 ) ) 
+        if F[pl] > 0.
             λ̇[pl] = 0.0
             ε̇.IIᵉᶠᶠ[pl]   = sqrt( (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl])^2 + 0.5*( (0.0 + τ0.xx[pl]/2/ηe[pl])^2 + ((ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl])).^2 + ((0.0 + τ0.zz[pl]/2/ηe[pl])).^2 ) ) 
-            if F[pl] > 0.
-                ispl[pl]  = 1
-                λ̇[pl]     = F[pl] / (ηvp + ηve[pl] + Kb[pl]*Δt*sin(ϕ)*sin(ψ))
-                λ̇rel[pl]  = (1.0-rel)*λ̇rel[pl] + rel*λ̇[pl]   
-                Pt[pl]   +=  Kb[pl]*Δt*sin(ψ)*λ̇rel[pl]
-                τ.xy[pl]  =  2 * ηve[pl] * (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl] - τ.xy[pl]/τ.II[pl]/2*λ̇rel[pl] ) 
-                τ.yy[pl]  =  2 * ηve[pl] * (ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl] - τ.yy[pl]/τ.II[pl]/2*λ̇rel[pl] )
-                τ.xx[pl]  =  2 * ηve[pl] * (0.0      + τ0.xx[pl]/2/ηe[pl] - τ.xx[pl]/τ.II[pl]/2*λ̇rel[pl] )
-                τ.zz[pl]  =  2 * ηve[pl] * (0.0      + τ0.zz[pl]/2/ηe[pl] - τ.zz[pl]/τ.II[pl]/2*λ̇rel[pl] )
-                τ.II[pl]  = sqrt(τ.xy[pl]^2 + 0.5*(τ.yy[pl]^2 + τ.xx[pl]^2 + τ.zz[pl]^2))
-                ηvep[pl] = τ.II[pl] / 2.0 / ε̇.IIᵉᶠᶠ[pl]
-                Fc[pl]   = τ.II[pl] - Coh[pl]*cos(ϕ) - Pt[pl]*sin(ϕ) - ηvp*λ̇rel[pl]
+            ispl[pl]  = 1
+            if type==:MC 
+                F0   = 0.0
+                iter = 0
+                𝐹τ   = τ -> Yield_MCAS95(τ, Pt[pl], ϕ, Coh[pl], θt, ηvp, 0.0 )
+                𝐹𝜆   = λ̇ -> Fλ(λ̇, ∂F∂τ, ϕ, ψ, Coh[pl], θt, ηvp, ηve[pl], ηe[pl], Kb[pl], Δt, τ0.xx[pl], τ0.yy[pl], τ0.zz[pl], τ0.xy[pl], Pt0[pl], 0.0, ε̇.yy[pl], 0.0, ε̇.xy[pl], ∇v.tot[pl])
+                ∂F∂τ = ForwardDiff.gradient( 𝐹τ, [τ.xx[pl]; τ.yy[pl]; τ.zz[pl]; τ.xy[pl]])
+                for _=1:10
+                    iter +=1
+                    Fc[pl] = Fλ(λ̇[pl], ∂F∂τ, ϕ, ψ, Coh[pl], θt, ηvp, ηve[pl], ηe[pl], Kb[pl], Δt, τ0.xx[pl], τ0.yy[pl], τ0.zz[pl], τ0.xy[pl], Pt0[pl], 0.0, ε̇.yy[pl], 0.0, ε̇.xy[pl], ∇v.tot[pl])
+                    iter==1 ? F0 = Fc[pl] :  nothing
+                    abs(Fc[pl]) < 1e-7 ? break : nothing
+                    ∂F∂λ̇  = ForwardDiff.derivative(𝐹𝜆, λ̇[pl])
+                    Δλ̇    = Fc[pl]/∂F∂λ̇
+                    Fmin .= 𝐹𝜆.(λ̇[pl] .- α.*Δλ̇)
+                    _,imin = findmin(abs.(Fmin))
+                    λ̇[pl] -= α[imin]*Δλ̇ 
+                end
+            else 
+                λ̇[pl]  = F[pl] / (ηvp + ηve[pl] + Kb[pl]*Δt*sin(ϕ)*sin(ψ))
+                ∂F∂τ   = [τ.xx[pl]; τ.yy[pl]; τ.zz[pl]; τ.xy[pl]]./τ.II[pl]/2
+                Fc[pl] = τ.II[pl] - λ̇rel[pl]*ηve[pl] - Coh[pl]*cos(ϕ) - (Pt[pl] + Kb[pl]*Δt*λ̇rel[pl]*sin(ψ))*sin(ϕ) - ηvp*λ̇rel[pl]
             end
+            λ̇rel[pl] = (1.0-rel)*λ̇rel[pl] + rel*λ̇[pl]   
+            τ.xx[pl] = 2 * ηve[pl] * (0.0      + τ0.xx[pl]/2/ηe[pl] - ∂F∂τ[1]*λ̇rel[pl])
+            τ.yy[pl] = 2 * ηve[pl] * (ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl] - ∂F∂τ[2]*λ̇rel[pl]) 
+            τ.zz[pl] = 2 * ηve[pl] * (0.0      + τ0.zz[pl]/2/ηe[pl] - ∂F∂τ[3]*λ̇rel[pl])
+            τ.xy[pl] = 2 * ηve[pl] * (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl] - ∂F∂τ[4]*λ̇rel[pl]) 
+            Pt[pl]   = Pt0[pl] - Kb[pl]*Δt*(∇v.tot[pl] - sin(ψ)*λ̇rel[pl])
+            ηvep[pl] = τ.II[pl] / 2.0 / ε̇.IIᵉᶠᶠ[pl]
+            # F2 = Yield_MCAS95( [τ.xx[pl]; τ.yy[pl]; τ.zz[pl]; τ.xy[pl]], Pt[pl], ϕ, Coh[pl], θt, ηvp, λ̇rel[pl] )
         end
     end
 end
@@ -130,16 +227,24 @@ function main()
     G          = E/2.0/(1+ν)
     Kbulk      = E/3.0/(1-2ν) 
     μs         = nondimensionalize(1e52Pa*s, CharDim)
+    # yield      = ( 
+    #     Coh0       = nondimensionalize(0.0Pa, CharDim),
+    #     ϕ          = 40.0*π/180.,
+    #     ψ          = 10.0*π/180.,  
+    #     ηvp        = nondimensionalize(2*1e11Pa*s, CharDim),
+    # )
     yield      = ( 
-        Coh0       = nondimensionalize(0.0Pa, CharDim),
+        type       = :MC, # :DP or :MC
+        Coh0       = nondimensionalize(1e5Pa, CharDim),
         ϕ          = 40.0*π/180.,
-        ψ          = 10.0*π/180.,  
+        ψ          = 10.0*π/180.,    
+        θt         = 25.0*π/180.,
         ηvp        = nondimensionalize(2*1e11Pa*s, CharDim),
     )
     
     # Numerical parameters
     Ncy        = 100
-    Nt         = 500
+    Nt         = 1000
     Δy         = Ly/Ncy
     yc         = LinRange(-Ly/2-Δy/2, Ly/2+Δy/2, Ncy+2)
     yv         = LinRange(-Ly/2,      Ly/2,      Ncy+1)
@@ -323,23 +428,3 @@ function main()
 end
 
 @time main()
-
-# function getellipsepoints(cx, cy, rx, ry, θ)
-# 	t = range(0, 2*pi, length=100)
-# 	ellipse_x_r = @. rx * cos(t)
-# 	ellipse_y_r = @. ry * sin(t)
-# 	R = [cos(θ) sin(θ); -sin(θ) cos(θ)]
-# 	r_ellipse = [ellipse_x_r ellipse_y_r] * R
-# 	x = @. cx + r_ellipse[:,1]
-# 	y = @. cy + r_ellipse[:,2]
-# 	(x,y)
-# end
-
-# cx = 1  # x-position of the center
-# cy = 2  # y-position of the center
-# rx = 5  # major radius
-# ry = 2  # minor radius
-# θ  = π/3 # angle to x axis
-
-# #plot
-# lines!(ax2, getellipsepoints(cx, cy, rx, ry, θ)...)
