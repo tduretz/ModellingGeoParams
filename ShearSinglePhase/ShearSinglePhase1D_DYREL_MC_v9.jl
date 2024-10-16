@@ -1,6 +1,8 @@
-using GeoParams, Plots, Printf, MathTeXEngine, BenchmarkTools, LinearAlgebra, StaticArrays
+using GeoParams, Plots, Printf, MathTeXEngine, BenchmarkTools, LinearAlgebra, StaticArrays, ForwardDiff
 import LinearAlgebra:norm
 # Makie.update_theme!(fonts = (regular = texfont(), bold = texfont(:bold), italic = texfont(:italic)))
+
+# with Yury 24/01/24
 
 const cmy = 356.25*3600*24*100
 
@@ -63,47 +65,115 @@ end
 @inline @views  function Kinematics!(ε̇, ∇v, V, Δy)
     @. ε̇.xy     =  0.5*(V.x[2:end] - V.x[1:end-1])/Δy
     @. ε̇.yy     = 2//3*(V.y[2:end] - V.y[1:end-1])/Δy # deviatoric
-    @. ε̇.xx     = -1//3*(V.y[2:end] - V.y[1:end-1])/Δy
-    @. ε̇.zz     = -1//3*(V.y[2:end] - V.y[1:end-1])/Δy
     @. ∇v.tot   = (V.y[2:end] - V.y[1:end-1])/Δy
+end
+
+Lode(τII, J3) = -3.0*sqrt(3.0)/2.0*J3/τII^3
+
+function Yield_MCAS95(τ, P, ϕ, c, θt, ηvp, λ̇ )
+    τII = sqrt(0.5*(τ[1]^2 + τ[2]^2 + τ[3]^2) + τ[4]^2)
+    J3  = τ[1]*τ[2]*τ[3] + τ[3]*τ[4]^2 # + 2*τ[4]*τ[5]*τ[6] + τ[1]*τ[6]^2 + τ[2]*τ[5]^2
+    L   = Lode(τII,J3)
+    L> 1.0 ? L= 1.0 : nothing
+    L<-1.0 ? L=-1.0 : nothing
+    θ   =  1.0/3.0*asin(L)
+    if abs(θ)>θt
+        sgnθ = sign(θ)
+        A = 1/3*cos(θt)*(3+tan(θt)*tan(3*θt) + 1/sqrt(3)*sgnθ*(tan(3*θt)-3*tan(θt))*sin(ϕ))
+        B = 1/(3*cos(3*θt))*(sgnθ*sin(θt) + 1/sqrt(3)*sin(ϕ)*cos(θt))
+        k = A - B*sin(3*θ)
+    else
+        k   = cos(θ) - 1/sqrt(3)*sin(ϕ)*sin(θ)
+    end
+    F   = k*τII - P*sin(ϕ) - c*cos(ϕ) - ηvp*λ̇
+    return F
+end
+
+function Fλ(λ̇, ∂Q∂τ, ϕ, ψ, c, θt, ηvp, ηve, ηe, Kb, Δt, τxx0, τyy0, τzz0, τxy0, P0, ε̇xx, ε̇yy, ε̇zz, ε̇xy, ∇v)
+    τxx  =  2 * ηve * (0.0 + τxx0/2/ηe - λ̇*∂Q∂τ[1])
+    τyy  =  2 * ηve * (ε̇yy + τyy0/2/ηe - λ̇*∂Q∂τ[2]) 
+    τzz  =  2 * ηve * (0.0 + τzz0/2/ηe - λ̇*∂Q∂τ[3])
+    τxy  =  2 * ηve * (ε̇xy + τxy0/2/ηe - λ̇*∂Q∂τ[4]) 
+    P    = P0 - Kb*Δt*(∇v - λ̇*sin(ψ))
+    F    = Yield_MCAS95([τxx; τyy; τzz; τxy], P, ϕ, c, θt, ηvp, λ̇ )
+    return F
 end
 
 @inline @views function Rheology!(τ, Pt, ε̇, ∇v, τ0, Pt0, Δt, arrays, yield, rel, NL)
     
-    Coh, ϕ, ψ, ηvp = yield
+    type, Coh, ϕ, ψ, θt, ηvp = yield
     Kb, ηe, ηve, ηvep, F, Fc, λ̇, λ̇rel, ispl = arrays
-    
+
+    α    = LinRange(0.1, 1.0, 5)
+    Fmin = zero(α)
+
     # Stress
-    @. τ.xy     =  2 * ηve * (ε̇.xy + τ0.xy/2/ηe) 
+    @. τ.xx     =  2 * ηve * (0.0  + τ0.xx/2/ηe)
     @. τ.yy     =  2 * ηve * (ε̇.yy + τ0.yy/2/ηe) 
-    @. τ.xx     =  2 * ηve * (ε̇.xx + τ0.xx/2/ηe)
-    @. τ.zz     =  2 * ηve * (ε̇.zz + τ0.zz/2/ηe)
+    @. τ.zz     =  2 * ηve * (0.0  + τ0.zz/2/ηe)
+    @. τ.xy     =  2 * ηve * (ε̇.xy + τ0.xy/2/ηe) 
     @. τ.II     = sqrt(τ.xy.^2 + 0.5*(τ.yy.^2 + τ.xx.^2 + τ.zz.^2))
     @. Pt       = Pt0 - Kb*Δt*∇v.tot
+    @. ηvep     = ηve
 
-    if NL
-        # Plasticity
-        @. ηvep = ηve
-        @. F    = τ.II - Coh*cos(ϕ) - Pt*sin(ϕ)
+    if type==:MC
+        for i in eachindex(F)
+            F[i] = Yield_MCAS95( [τ.xx[i]; τ.yy[i]; τ.zz[i]; τ.xy[i]], Pt[i], ϕ, Coh[i], θt, ηvp, 0. )
+        end
+    else
+        @. F    = τ.II - Coh*cos(ϕ) - Pt*sin(ϕ) 
+    end
 
-        for pl in axes(F,1)
-            λ̇[pl] = 0.0
-            ε̇.IIᵉᶠᶠ[pl]   = sqrt( (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl])^2 + 0.5*( (0.0 + τ0.xx[pl]/2/ηe[pl])^2 + ((ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl])).^2 + ((0.0 + τ0.zz[pl]/2/ηe[pl])).^2 ) ) 
-            if F[pl] > 0.
-                ispl[pl]  = 1
-                λ̇[pl]     = F[pl] / (ηvp + ηve[pl] + Kb[pl]*Δt*sin(ϕ)*sin(ψ))
-                λ̇rel[pl]  = (1.0-rel)*λ̇rel[pl] + rel*λ̇[pl]   
-                Pt[pl]   +=  Kb[pl]*Δt*sin(ψ)*λ̇rel[pl]
-                τ.xy[pl]  =  2 * ηve[pl] * (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl] - τ.xy[pl]/τ.II[pl]/2*λ̇rel[pl] ) 
-                τ.yy[pl]  =  2 * ηve[pl] * (ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl] - τ.yy[pl]/τ.II[pl]/2*λ̇rel[pl] )
-                τ.xx[pl]  =  2 * ηve[pl] * (ε̇.xx[pl] + τ0.xx[pl]/2/ηe[pl] - τ.xx[pl]/τ.II[pl]/2*λ̇rel[pl] )
-                τ.zz[pl]  =  2 * ηve[pl] * (ε̇.zz[pl] + τ0.zz[pl]/2/ηe[pl] - τ.zz[pl]/τ.II[pl]/2*λ̇rel[pl] )
-                τ.II[pl]  = sqrt(τ.xy[pl]^2 + 0.5*(τ.yy[pl]^2 + τ.xx[pl]^2 + τ.zz[pl]^2))
-                ηvep[pl] = τ.II[pl] / 2.0 / ε̇.IIᵉᶠᶠ[pl]
-                Fc[pl]   = τ.II[pl] - Coh[pl]*cos(ϕ) - Pt[pl]*sin(ϕ) - ηvp*λ̇rel[pl]
+    for pl in axes(F,1)
+        
+        if F[pl] > 0.
+            # λ̇[pl] = 0.0
+            # ε̇.IIᵉᶠᶠ[pl]   = sqrt( (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl])^2 + 0.5*( (0.0 + τ0.xx[pl]/2/ηe[pl])^2 + ((ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl])).^2 + ((0.0 + τ0.zz[pl]/2/ηe[pl])).^2 ) ) 
+            # ispl[pl]  = 1
+            # if type==:MC 
+            #     F0   = 0.0
+            #     iter = 0
+            #     𝐹τ   = τ -> Yield_MCAS95(τ, Pt[pl], ϕ, Coh[pl], θt, ηvp, 0.0 )
+                # 𝐹𝜆   = λ̇ -> Fλ(λ̇, ∂F∂τ, ϕ, ψ, Coh[pl], θt, ηvp, ηve[pl], ηe[pl], Kb[pl], Δt, τ0.xx[pl], τ0.yy[pl], τ0.zz[pl], τ0.xy[pl], Pt0[pl], 0.0, ε̇.yy[pl], 0.0, ε̇.xy[pl], ∇v.tot[pl])
+                # ∂F∂τ = ForwardDiff.gradient( 𝐹τ, [τ.xx[pl]; τ.yy[pl]; τ.zz[pl]; τ.xy[pl]])
+            #     for _=1:10
+            #         iter +=1
+            #         Fc[pl] = Fλ(λ̇[pl], ∂F∂τ, ϕ, ψ, Coh[pl], θt, ηvp, ηve[pl], ηe[pl], Kb[pl], Δt, τ0.xx[pl], τ0.yy[pl], τ0.zz[pl], τ0.xy[pl], Pt0[pl], 0.0, ε̇.yy[pl], 0.0, ε̇.xy[pl], ∇v.tot[pl])
+            #         iter==1 ? F0 = Fc[pl] :  nothing
+            #         abs(Fc[pl]) < 1e-7 ? break : nothing
+            #         ∂F∂λ̇  = ForwardDiff.derivative(𝐹𝜆, λ̇[pl])
+            #         Δλ̇    = Fc[pl]/∂F∂λ̇
+            #         Fmin .= 𝐹𝜆.(λ̇[pl] .- α.*Δλ̇)
+            #         _,imin = findmin(abs.(Fmin))
+            #         λ̇[pl] -= α[imin]*Δλ̇ 
+            #     end
+            # else 
+            λ̇[pl] += Fc[pl] *100
+            if type==:MC
+                𝐹τ   = τ -> Yield_MCAS95(τ, Pt[pl], ϕ, Coh[pl], θt, ηvp, 0.0 )
+                ∂F∂τ = ForwardDiff.gradient( 𝐹τ, [τ.xx[pl]; τ.yy[pl]; τ.zz[pl]; τ.xy[pl]])
+            else
+                ∂F∂τ   = [τ.xx[pl]; τ.yy[pl]; τ.zz[pl]; τ.xy[pl]]./τ.II[pl]/2.
             end
+            τ.xx[pl] = 2 * ηve[pl] * (0.0      + τ0.xx[pl]/2/ηe[pl] - ∂F∂τ[1]*λ̇[pl])
+            τ.yy[pl] = 2 * ηve[pl] * (ε̇.yy[pl] + τ0.yy[pl]/2/ηe[pl] - ∂F∂τ[2]*λ̇[pl]) 
+            τ.zz[pl] = 2 * ηve[pl] * (0.0      + τ0.zz[pl]/2/ηe[pl] - ∂F∂τ[3]*λ̇[pl])
+            τ.xy[pl] = 2 * ηve[pl] * (ε̇.xy[pl] + τ0.xy[pl]/2/ηe[pl] - ∂F∂τ[4]*λ̇[pl]) 
+            Pt[pl]   = Pt0[pl] - Kb[pl]*Δt*(∇v.tot[pl] - sin(ψ)*λ̇[pl])
+            ηvep[pl] = τ.II[pl] / 2.0 / ε̇.IIᵉᶠᶠ[pl]
+        else
+            λ̇[pl]       = 0.0
         end
     end
+
+    if type==:MC
+        for i in eachindex(F)
+            Fc[i] = Yield_MCAS95( [τ.xx[i]; τ.yy[i]; τ.zz[i]; τ.xy[i]], Pt[i], ϕ, Coh[i], θt, ηvp, λ̇[i] )
+        end
+    else
+        @. Fc    = τ.II - Coh*cos(ϕ) - Pt*sin(ϕ) - λ̇*ηvp
+    end
+
 end
 
 function main()
@@ -112,19 +182,19 @@ function main()
     CharDim    = SI_units(length=1000m, temperature=1000C, stress=1e7Pa, viscosity=1e15Pas)
 
     # Physical parameters
-    # σxxB       = nondimensionalize( -25e3Pa, CharDim) # Courbe A - Vermeer
-    # σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe A - Vermeer
+    #σxxB       = nondimensionalize( -25e3Pa, CharDim) # Courbe A - Vermeer
+    #σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe A - Vermeer
     σxxB       = nondimensionalize(-400e3Pa, CharDim) # Courbe B - Vermeer
     σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe B - Vermeer
-    σzzB       = σxxB
+    σzzB       = 0*σxxB
     PB         = -(σxxB + σyyB + σzzB)/3.0
     τxxB       = PB + σxxB
     τyyB       = PB + σyyB
     τzzB       = PB + σzzB
     τxyB       = 0.0
 
-    E          = nondimensionalize(45MPa, CharDim)
-    ν          = 0.2
+    E          = nondimensionalize(20MPa, CharDim)
+    ν          = 0.0
     Ly         = nondimensionalize(4e4m, CharDim)
     Ẇ0         = nondimensionalize(5e-5Pa/s, CharDim)
     σ          = Ly/40
@@ -132,36 +202,18 @@ function main()
     G          = E/2.0/(1+ν)
     Kbulk      = E/3.0/(1-2ν) 
     μs         = nondimensionalize(1e52Pa*s, CharDim)
-    MCfit      = :inscribed  # :compression, :extension or :inscribed (https://www.researchgate.net/publication/267787500_Measuring_discrepancies_between_Coulomb_and_other_geotechnical_criteria_Drucker-Prager_and_Matsuoka-Nakai)
-    MC         = ( 
-        Coh0       = nondimensionalize(0.0Pa, CharDim),
+    yield      = ( 
+        type       = :MC, # :DP or :MC
+        Coh0       = nondimensionalize(1e5Pa, CharDim),
         ϕ          = 40.0*π/180.,
-        ψ          = 10.0*π/180.,  
-        ηvp        = nondimensionalize(5e9Pa*s, CharDim),
-    )
-    if MCfit == :compression
-        θ = π/6
-        α = 2*sin(MC.ϕ) / (sqrt(3)*(3 - sin(MC.ϕ)))
-        β = 2*sin(MC.ψ) / (sqrt(3)*(3 - sin(MC.ψ)))
-    elseif MCfit == :extension
-        θ = -π/6
-        α = 2*sin(MC.ϕ) / (sqrt(3)*(3 + sin(MC.ϕ)))
-        β = 2*sin(MC.ψ) / (sqrt(3)*(3 + sin(MC.ψ)))
-    elseif MCfit == :inscribed
-        α = 1*sin(MC.ϕ) / (sqrt(3)*sqrt(3 + sin(MC.ϕ))^2)
-        β = 1*sin(MC.ψ) / (sqrt(3)*sqrt(3 + sin(MC.ψ))^2)
-    end
-    H = MC.Coh0/tan(MC.ϕ)
-    yield = (
-        Coh0       = 3*α*H,
-        ϕ          = 3*α,
-        ψ          = 3*β,  
-        ηvp        = MC.ηvp,  
+        ψ          = 10.0*π/180.,    
+        θt         = 25.0*π/180.,
+        ηvp        = nondimensionalize(1*1e8Pa*s, CharDim),
     )
     
     # Numerical parameters
     Ncy        = 100
-    Nt         = 3000
+    Nt         = 10000
     Δy         = Ly/Ncy
     yc         = LinRange(-Ly/2-Δy/2, Ly/2+Δy/2, Ncy+2)
     yv         = LinRange(-Ly/2,      Ly/2,      Ncy+1)
@@ -188,10 +240,10 @@ function main()
     arrays.Kb[50]  = 2 *Kbulk #.- Coh0 .* exp.(-yv.^2/2σ^2)
     @. arrays.ηve  = 1.0 /(1.0/μs + 1.0/arrays.ηe)
     @. arrays.ηvep = arrays.ηve
-    ε̇ = ( xy=ε0*ones(Ncy+1), xx=zeros(Ncy+1), yy=zeros(Ncy+1), zz=zeros(Ncy+1), IIᵉᶠᶠ=zeros(Ncy+1), xy_pl=zeros(Ncy+1), xx_pl=zeros(Ncy+1), yy_pl=zeros(Ncy+1), zz_pl=zeros(Ncy+1), 
-    xy_el=zeros(Ncy+1), xx_el=zeros(Ncy+1), yy_el=zeros(Ncy+1), zz_el=zeros(Ncy+1), xy_net=zeros(Ncy+1), xx_net=zeros(Ncy+1), yy_net=zeros(Ncy+1), zz_net=zeros(Ncy+1) )
+    ε̇ = ( xy=ε0*ones(Ncy+1), yy=zeros(Ncy+1), IIᵉᶠᶠ=zeros(Ncy+1), xy_pl=zeros(Ncy+1), yy_pl=zeros(Ncy+1), 
+    xy_el=zeros(Ncy+1), yy_el=zeros(Ncy+1), xy_net=zeros(Ncy+1), yy_net=zeros(Ncy+1) )
     ∇v = ( tot=zeros(Ncy+1), el=zeros(Ncy+1), pl=zeros(Ncy+1), net=zeros(Ncy+1) )
-    η     = zeros(Ncy+1)
+    η        =    zeros(Ncy+1)
     V     = (x=zeros(Ncy+2), y=zeros(Ncy+2))
     Vit   = (x=zeros(Ncy+2), y=zeros(Ncy+2))
     R     = (x=zeros(Ncy+2), y=zeros(Ncy+2))
@@ -212,7 +264,7 @@ function main()
     # PT solver
     niter = 100000
     nout  = 100
-    ϵ     = 1e-10
+    ϵ     = 1e-9
     rel   = 1e-2
     errPt, errVx, errVy = 0., 0., 0.
     KδV   = (x = zeros(Ncy+2), y = zeros(Ncy+2))
@@ -255,20 +307,14 @@ function main()
         
             # Check
             @. ∇v.tot   = (V.y[2:end] - V.y[1:end-1])/Δy
-            @. ε̇.xx_el  =  (τ.xx - τ0.xx)/2/arrays.ηe
-            @. ε̇.xx_pl  =   τ.xx/τ.II/2*arrays.λ̇rel
             @. ε̇.yy_el  =  (τ.yy - τ0.yy)/2/arrays.ηe
             @. ε̇.yy_pl  =   τ.yy/τ.II/2*arrays.λ̇rel
-            @. ε̇.zz_el  =  (τ.zz - τ0.zz)/2/arrays.ηe
-            @. ε̇.zz_pl  =   τ.zz/τ.II/2*arrays.λ̇rel
             @. ε̇.xy_el  =  (τ.xy - τ0.xy)/(2*arrays.ηe)
             @. ε̇.xy_pl  =   τ.xy/τ.II/2*arrays.λ̇rel
             @. ∇v.el    =  -(Pt - Pt0)/arrays.Kb/Δt
             @. ∇v.pl    =  arrays.λ̇rel*sin(yield.ψ)
             @. ε̇.xy_net = ε̇.xy - ε̇.xy_el - ε̇.xy_pl
-            @. ε̇.xx_net = ε̇.xx - ε̇.xx_el - ε̇.xx_pl
             @. ε̇.yy_net = ε̇.yy - ε̇.yy_el - ε̇.yy_pl
-            @. ε̇.zz_net = ε̇.zz - ε̇.zz_el - ε̇.zz_pl
             @. ∇v.net   = ∇v.tot  - ∇v.el  - ∇v.pl
             
             # DYREL
@@ -302,8 +348,8 @@ function main()
                 errVx = norm(R.x.*D.x)/sqrt(length(R.x))
                 errVy = norm(R.y.*D.y)/sqrt(length(R.y))
                 @printf("Iteration %05d --- Time step %4d --- Δt = %2.2e --- ΔtC = %2.2e --- εxy = %2.2e --- max(F) = %2.2e --- max(Fc) = %2.2e \n", iter, it, ustrip(dimensionalize(Δt, s, CharDim)), ustrip(dimensionalize(Δy/2/maximum(V.x), s, CharDim)), ε0*it*Δt, maximum(arrays.F), maximum(arrays.Fc))
-                @printf("Exy_net = %2.2e --- Exx_net = %2.2e --- Eyy_net = %2.2e --- Ezz_net = %2.2e --- Div net = %2.2e\n", mean(abs.(ε̇.xy_net)), mean(abs.(ε̇.xx_net)), mean(abs.(ε̇.yy_net)), mean(abs.(ε̇.zz_net)), mean(abs.(∇v.net)) )
-                # @printf("Exy_el  = %2.2e --- Exy_pl  = %2.2e --- Exy net = %2.2e\n", mean(abs.(ε̇.xy_el)), mean(abs.(ε̇.xy_pl)), mean(abs.(ε̇.xy_net)) )
+                @printf("Exy_net = %2.2e --- Eyy_net = %2.2e --- Div net = %2.2e\n", mean(abs.(ε̇.xy_net)), mean(abs.(ε̇.yy_net)), mean(abs.(∇v.net)) )
+                @printf("Exy_el  = %2.2e --- Exy_pl  = %2.2e --- Exy net = %2.2e\n", mean(abs.(ε̇.xy_el)), mean(abs.(ε̇.xy_pl)), mean(abs.(ε̇.xy_net)) )
                 @printf("fVx = %2.4e\n", errVx)
                 @printf("fVy = %2.4e\n", errVy)
                 ( errVx < ϵ && errVy < ϵ) && break 
@@ -316,7 +362,7 @@ function main()
         probes.ẆB[it]         = τ.xy[end]*ε̇.xy[end]
         probes.τxyB[it]       = τ.xy[end]
         probes.VxB[it]        = 0.5*(V.x[end] + V.x[end-1])
-        @show probes.σyyB[it] = τ.yy[end] - Pt[end]
+        probes.σyyB[it] = τ.yy[end] - Pt[end]
 
         PrincipalStress!(σ3, τ, Pt)
         theta = ustrip.(atand.(σ3.z[:] ./ σ3.x[:]))
@@ -338,8 +384,8 @@ function main()
             # p4=plot!(1:it, ustrip.(dimensionalize(probes.τxy0[1:it], Pa, CharDim))/1e3, label="τxy" )
             app_fric      =  ustrip.(-probes.τxyB[1:it]./probes.σyyB[1:it])
             app_fric_theo =  sind.(2*probes.theta[1:it]) .* sin(yield.ϕ) ./ (1 .+ cosd.(2*probes.theta[1:it]) .* sin(yield.ϕ))
-            p4=plot!((1:it)*ε0*Δt, app_fric, label="-τxy/σyyBC", title=@sprintf("max = %1.4f", maximum(app_fric)) )
-            p4=plot!((1:it)*ε0*Δt, app_fric_theo, label="theoritical", title=@sprintf("max = %1.4f", maximum(app_fric_theo)) )
+            p4=plot!((1:it)*ε0*Δt*2, app_fric, label="-τxy/σyyBC", title=@sprintf("max = %1.4f", maximum(app_fric)) )
+            p4=plot!((1:it)*ε0*Δt*2, app_fric_theo, label="theoritical", title=@sprintf("max = %1.4f", maximum(app_fric_theo)) )
             # p4=plot!((1:it)*ε0*Δt, ustrip.(dimensionalize(-probes.σyy0[1:it], Pa, CharDim))/1e3, label="σyyBC" )
             display(plot(p1,p2,p3,p4))
         end
@@ -348,23 +394,3 @@ function main()
 end
 
 @time main()
-
-# function getellipsepoints(cx, cy, rx, ry, θ)
-# 	t = range(0, 2*pi, length=100)
-# 	ellipse_x_r = @. rx * cos(t)
-# 	ellipse_y_r = @. ry * sin(t)
-# 	R = [cos(θ) sin(θ); -sin(θ) cos(θ)]
-# 	r_ellipse = [ellipse_x_r ellipse_y_r] * R
-# 	x = @. cx + r_ellipse[:,1]
-# 	y = @. cy + r_ellipse[:,2]
-# 	(x,y)
-# end
-
-# cx = 1  # x-position of the center
-# cy = 2  # y-position of the center
-# rx = 5  # major radius
-# ry = 2  # minor radius
-# θ  = π/3 # angle to x axis
-
-# #plot
-# lines!(ax2, getellipsepoints(cx, cy, rx, ry, θ)...)

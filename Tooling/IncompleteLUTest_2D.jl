@@ -91,6 +91,29 @@ function ConstructM(k, ρ, Cp, Δx, Δy, Δt, transient, b, T_South, T_North)
     return droptol!(sparse(IM, JM, VM), 1e-13), (cC=cC, cS=cS, cW=cW, cE=cE, cN=cN)
 end
 
+function LaggedSubstitutions!(x2, y2, x20, y20, pc, b, nit=1, Ncx=size(x2,1), Ncy=size(x2,2) )
+
+    for it=1:nit
+        x20 .= x2
+        y20 .= y2
+        for j in axes(x20, 2), i in axes(x20, 1) 
+            if i>1   yW = y20[i-1,j] else yW = 0. end
+            if i<Ncx xE = x20[i+1,j] else xE = 0. end
+            if j>1   yS = y20[i,j-1] else yS = 0. end
+            if j<Ncy xN = x20[i,j+1] else xN = 0. end
+
+            y2[i,j] =                      -pc.cW[i,j]*yW - pc.cS[i,j]*yS +    b[i,j]  
+        end 
+        for j in axes(x20, 2), i in axes(x20, 1) 
+            if i>1   yW = y20[i-1,j] else yW = 0. end
+            if i<Ncx xE = x20[i+1,j] else xE = 0. end
+            if j>1   yS = y20[i,j-1] else yS = 0. end
+            if j<Ncy xN = x20[i,j+1] else xN = 0. end
+            x2[i,j] =  (1.0/pc.cC[i,j]) * (-pc.cE[i,j]*xE - pc.cN[i,j]*xN  + y2[i,j])
+        end 
+    end
+end
+
 function ILU_v2(coeff, nit)
     # M2Di style storage
     pC = copy(coeff.cC); pC0 = copy(coeff.cC)
@@ -177,6 +200,92 @@ function ForwardBackwardSolve!(T2D, b, pc, nit, tol, Ncx=size(T2D,1), Ncy=size(T
     end
 end
 
+function ForwardBackwardSolveISAI!(T2D, b, pc, ipc, nit, tol, Ncx=size(T2D,1), Ncy=size(T2D,2))
+    r2D    = zeros(size(T2D)) # temp array
+    F2D    = zeros(size(T2D)) # temp array
+    F2D_PC = zeros(size(T2D)) # temp array
+    for iter=1:nit
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            if i>1   rW = r2D[i-1,j] else rW = 0. end
+            if j>1   rS = r2D[i,j-1] else rS = 0. end
+            F2D[i,j] =  -pc.cW[i,j]*rW - pc.cS[i,j]*rS +  b[i,j] - r2D[i,j] 
+        end
+        # apply PC
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            if i>1   rW = F2D[i-1,j] else rW = 0. end
+            if j>1   rS = F2D[i,j-1] else rS = 0. end
+            F2D_PC[i,j] = ipc.cW[i,j]*rW + ipc.cS[i,j]*rS  + F2D[i,j]
+            # F2D_PC[i,j] = F2D[i,j]
+        end
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            r2D[i,j] += F2D_PC[i,j]
+        end
+
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            if i<Ncx fE = T2D[i+1,j] else fE = 0. end
+            if j<Ncy fN = T2D[i,j+1] else fN = 0. end
+            F2D[i,j] =  (-pc.cE[i,j]*fE - pc.cN[i,j]*fN + r2D[i,j]) - T2D[i,j]*pc.cC[i,j]
+        end
+        # apply PC
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            if i<Ncx fE = F2D[i+1,j] else fE = 0. end
+            if j<Ncy fN = F2D[i,j+1] else fN = 0. end
+            F2D_PC[i,j] = F2D[i,j].*ipc.cC[i,j] + fE.*ipc.cE[i,j] + fN.*ipc.cN[i,j]
+            # F2D_PC[i,j] = F2D[i,j]./pc.cC[i,j]
+        end
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            T2D[i,j] += F2D_PC[i,j]
+        end
+        @show norm(F2D)/length(F2D)
+        if norm(F2D_PC)/length(F2D) < tol
+            @show "$iter" norm(F2D_PC)/length(b)
+            break
+        end
+    end
+end
+
+function ISAI_Poisson2D(pc)
+    LC   = ones(size(pc.cC))
+    LiW  = copy(pc.cW)
+    LiS  = copy(pc.cS)
+    LiC  = ones(size(pc.cC))
+
+    UC   = copy(pc.cC) 
+    UiC  = copy(pc.cC) 
+    UiE  = copy(pc.cE)
+    UiN  = copy(pc.cN)
+
+    # Iterations over coefficients
+    for iter=1:1
+        # Lower part
+        LiW[2:end,1:end-0]   .=  -1.0./LC[1:end-1,1:end-0] .* (LiW[2:end,1:end-0].*LC[1:end-1,1:end-0])
+        LiS[1:end-0,2:end]   .=  -1.0./LC[1:end-0,1:end-1] .* (LiS[1:end-0,2:end].*LC[1:end-0,1:end-1])
+        LiC[1:end-0,1:end-0] .=   1.0./LC[1:end-0,1:end-0] 
+        # Upper part
+        UiC[1:end-0,1:end-0] .=  1.0./UC[1:end-0,1:end-0] 
+        UiE[1:end-1,1:end-0] .= -1.0./UC[1:end-1,1:end-0] .* (UiE[1:end-1,1:end-0]./UC[2:end-0,1:end-0])
+        UiN[1:end-0,1:end-1] .= -1.0./UC[1:end-0,1:end-1] .* (UiN[1:end-0,1:end-1]./UC[1:end-0,2:end-0])
+    end
+    return (cS=LiS, cW=LiW, cC=UiC, cE=UiE, cN=UiN)
+end
+
+function ApplyISAI!(F_PC, F, ipc, Ncx=size(F,1), Ncy=size(F,2))
+    # Uinv * F
+    for j in axes(F, 2), i in axes(F, 1) 
+        if i<Ncx fE = F[i+1,j] else fE = 0. end
+        if j<Ncy fN = F[i,j+1] else fN = 0. end
+        F_PC[i,j] = ipc.cC[i,j]*F[i,j] + ipc.cE[i,j]*fE + ipc.cN[i,j]*fN
+    end
+    F .= F_PC
+    # Linv * F
+    for j in axes(F, 2), i in axes(F, 1) 
+        if i>1   fW = F[i-1,j] else fW = 0. end
+        if j>1   fS = F[i,j-1] else fS = 0. end
+        # Uinv * F
+        F_PC[i,j] =             F[i,j] + ipc.cW[i,j]*fW + ipc.cS[i,j]*fS
+    end
+end
+
 @views function maxloc!(A2, A)
     A2[2:end-1,2:end-1] .= max.(max.(max.(A[1:end-2,2:end-1], A[3:end,2:end-1]), A[2:end-1,2:end-1]), max.(A[2:end-1,1:end-2], A[2:end-1,3:end]))
     A2[[1,end],:] .= A2[[2,end-1],:]; A2[:,[1,end]] .= A2[:,[2,end-1]]
@@ -222,7 +331,7 @@ function main()
     T_South    = nondimensionalize(0C, CharDim)
 
     # Numerical parameters
-    Ncx        = 4
+    Ncx        = 5
     Ncy        = 5
     Nt         = 1
     Δx         = Lx/Ncx
@@ -357,7 +466,7 @@ function main()
 
     pc = ILU_v3(coeff, nit)
 
-    # Construct the matix (just for checks)
+    # Construct the matrices (just for checks)
     num = reshape(1:Ncx*Ncy, Ncx, Ncy)
     iC  = num
     iW  = ones(Ncx, Ncy); iW[2:end-0,:] .= num[1:end-1,:]
@@ -367,11 +476,11 @@ function main()
     IM   = [iC[:]; iC[:]; iC[:]; iC[:]; iC[:]]
     JM   = [iC[:]; iW[:]; iE[:]; iS[:]; iN[:]]
 
-    # Lower
+    # Upper
     VM   = [pc.cC[:]; 0*pc.cW[:]; pc.cE[:]; 0*pc.cS[:]; pc.cN[:]]
     U_PC   =  droptol!(sparse(IM, JM, VM), 1e-13)
 
-    # Upper
+    # Lower
     VM   = [0*pc.cC[:]; pc.cW[:]; 0*pc.cE[:]; pc.cS[:]; 0*pc.cN[:]]
     L_PC   =  droptol!(sparse(IM, JM, VM), 1e-13)
 
@@ -451,7 +560,28 @@ function main()
 
     ForwardBackwardSolve!(T2D, reshape(b, Ncx, Ncy), pc, nit, tol)
     @show norm(T2D[:] .- Tdir)/length(Tdir)
-    @info "End"
+    @info "Look into lagged solves because iterative ones are too demanding"
+    x  = zero(b[:])
+    y  = zero(x)
+    x0 = zero(x)
+    y0 = zero(x)
+
+    for it=1:2
+        x0 .= x
+        y0 .= y
+        BackwardSubstitutionLagged!(y, y0, L+IL, b[:])
+        BackwardSubstitutionLagged!(x, x0,    U, y   )
+    end
+    @show (norm(x), norm(y))
+
+    x2  = zeros(Ncx, Ncy)
+    y2  = zeros(Ncx, Ncy)
+    x20 = zeros(Ncx, Ncy)
+    y20 = zeros(Ncx, Ncy)
+    
+    LaggedSubstitutions!(x2, y2, x20, y20, pc, b )
+    @show norm(reshape(y, Ncx, Ncy) - y2)
+    @show norm(reshape(x, Ncx, Ncy) - x2)
     
     # b0 = zero(b)
     # b .= 0
@@ -468,7 +598,198 @@ function main()
     # L = run_incomplete_cholesky3(M)
     # display(Matrix(L'))
 
+    @info "Check if SPAI of (L+I) converges to (L+I)⁻¹ - sparsity restricted"
+    unrestrict = false
+    nit  = 5
+    Ld   = L + I(size(L,1))
+    Linv = inv(Matrix(Ld))
+    Ml   = copy(Ld)
+    Ml0  = copy(Ld)
+    for it=1:nit
+        Ml0 .= Ml
+        for j=1:size(M,1)
+            Ml[j,j] = 1.0/Ld[j,j]
+            for k=j+1:size(M,2)
+                if abs(Ld[k,j])>1e-13 || unrestrict
+                    Ml[k,j] = 0.0
+                    for r=j:k-1
+                        Ml[k,j] -= Ld[k,r] * Ml0[r,j]
+                    end
+                    Ml[k,j] /= Ld[k,k]
+                end
+            end
+        end
+        @show norm(Ml -  Linv)
+    end
 
+    @info "Check if SPAI of U converges to U⁻¹ - sparsity restricted"
+    Uinv = inv(Matrix(U))  
+    Mu   = copy(U)
+    Mu0  = copy(U)
+    for it=1:nit
+        Mu0 .= Mu
+        for j=1:size(M,1)
+            Mu[j,j] = 1.0/U[j,j]
+            for k=j+1:size(M,2)
+                if abs(Ld[k,j])>1e-13 || unrestrict
+                    Mu[j,k] = 0.0  # all indices flipped for U
+                    for r=j:k-1
+                        Mu[j,k] -= U[r,k] * Mu0[j,r]
+                    end
+                    Mu[j,k] /= U[k,k]
+                end
+            end
+        end
+        @show norm(Mu -  Uinv)
+    end
+    
+    @info "M2Di style inverse of L and U"
+    ipc = ISAI_Poisson2D(pc)
+
+    # Upper
+    VM   = [ipc.cC[:]; 0*pc.cW[:]; ipc.cE[:]; 0*pc.cS[:]; ipc.cN[:]]
+    Ui_PC   =  droptol!(sparse(IM, JM, VM), 1e-13)
+
+    # Lower
+    VM   = [ones(length(ipc.cC)); ipc.cW[:]; 0*pc.cE[:]; ipc.cS[:]; 0*pc.cN[:]]
+    Li_PC   =  droptol!(sparse(IM, JM, VM), 1e-13)
+    
+    @info "Lower check"
+    @show norm(Li_PC - Ml)/length(Li_PC)
+    @info "Upper check"
+    @show norm(Ui_PC - Mu)/length(Ui_PC)
+
+    @info "Apply ISAI"
+    F2D    = zeros(Ncx, Ncy)
+    F2D_PC = zeros(Ncx, Ncy)
+    ApplyISAI!(F2D_PC, F2D, ipc)
+
+    @info "Test ISAI as PC --- iterative Lx = b solve from Chow & Patel, 2015"
+    nit   = 50
+    tol   = 1e-5
+    # First L\b
+    IL    = I(size(L,1))
+    DLinv = IL
+    GL    = droptol!(IL - Ml*(L+IL), 1e-10) # clean: no diagonal entries - ISAI Preconditioned
+    # GL    = droptol!(IL - DLinv*(L+IL), 1e-10) # clean: no diagonal entries - Jacobi Preconditioned
+    a     = zero(b[:])
+    a    .= b[:]
+    @show "start $(norm(a)/length(b))"
+    for iter=1:nit
+        F2D  .= reshape(GL*a .+  DLinv*b[:] - a, Ncx, Ncy) 
+        # ApplyISAI!(F2D_PC, F2D, ipc)
+        a .+= F2D[:]
+        @show norm(F2D)/length(b)
+        if norm(F2D)/length(b) < tol
+            @show "$iter" norm(F2D)/length(b)
+            break
+        end
+    end
+
+    T2D .= 0
+    r2D = zeros(size(T2D)) # temp array
+    F2D = zeros(size(T2D))
+    r2D .= b
+    @show "start $(norm(r2D)/length(b))"
+    for iter=1:nit
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            if i>1   rW = r2D[i-1,j] else rW = 0. end
+            if j>1   rS = r2D[i,j-1] else rS = 0. end
+            F2D[i,j] =  -pc.cW[i,j]*rW - pc.cS[i,j]*rS +  b[i,j] - r2D[i,j] 
+        end
+        # apply PC
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            if i>1   rW = F2D[i-1,j] else rW = 0. end
+            if j>1   rS = F2D[i,j-1] else rS = 0. end
+            F2D_PC[i,j] = ipc.cW[i,j]*rW + ipc.cS[i,j]*rS  + F2D[i,j]
+        end
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            r2D[i,j] += F2D_PC[i,j]
+        end
+        
+        @show norm(F2D)/length(F2D)
+        if norm(F2D)/length(F2D) < tol
+            @show "$iter" norm(F2D)/length(b)
+            break
+        end
+    end
+
+    @info "Test ISAI as PC --- iterative Ux = b solve from Chow & Patel, 2015"
+
+    # Second L\b
+    DUinv =  spdiagm(1.0./diag(U))
+    GU    = droptol!(IL - Mu*U, 1e-10) # clean: no diagonal entries - ISAI Preconditioned
+    Tilu    = zero(b[:])
+    for iter=1:nit
+        F2D  .= reshape(GU*Tilu .+  DUinv*a - Tilu, Ncx, Ncy) 
+        Tilu .+= F2D[:]
+        @show norm(F2D)/length(b)
+        if norm(F2D)/length(b) < tol
+            @show "$iter" norm(F2D)/length(b)
+            break
+        end
+    end
+
+    T2D .= 0
+    r2D = zeros(size(T2D)) # temp array
+    F2D = zeros(size(T2D))
+    r2D .= b
+    r2D .= 0*reshape(a, Ncx, Ncy)
+    a2D  = reshape(a, Ncx, Ncy)
+    @show "start Ux = b $(norm(r2D)/length(b))"
+    for iter=1:nit
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            if i<Ncx fE = r2D[i+1,j] else fE = 0. end
+            if j<Ncy fN = r2D[i,j+1] else fN = 0. end
+            F2D[i,j] =  (-pc.cE[i,j]*fE - pc.cN[i,j]*fN + a2D[i,j]) - r2D[i,j]*pc.cC[i,j]
+        end
+        # apply PC
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            if i<Ncx fE = F2D[i+1,j] else fE = 0. end
+            if j<Ncy fN = F2D[i,j+1] else fN = 0. end
+            F2D_PC[i,j] = F2D[i,j].*ipc.cC[i,j] + fE.*ipc.cE[i,j] + fN.*ipc.cN[i,j]
+        end
+        for j in axes(T2D, 2), i in axes(T2D, 1) 
+            r2D[i,j] += F2D_PC[i,j]
+        end
+        
+        @show norm(F2D)/length(F2D)
+        if norm(F2D)/length(F2D) < tol
+            @show "$iter" norm(F2D)/length(b)
+            break
+        end
+    end
+
+    @info "Step 2 --- iterative U⁻¹(L⁻¹b) solve from Chow & Patel, 2015"
+    IL    = I(size(L,1))
+    DLinv = IL
+    GL    = droptol!(IL - Ml*(L+IL), 1e-10) # clean: no diagonal entries
+    # GL    = droptol!(IL - DLinv*(L+IL), 1e-10) # clean: no diagonal entries
+    a     = zero(b[:])
+    DUinv =  spdiagm(1.0./diag(U))
+    GU    = droptol!(IL - Mu*U, 1e-10) # clean: no diagonal entries
+    # GU    = droptol!(IL - DUinv*U, 1e-10) # clean: no diagonal entries
+    Tilu    = zero(b[:])
+    for iter=1:nit
+        a    .+= GL*a    .+  DLinv*b[:] - a
+        Tilu .+= GU*Tilu .+  DUinv*a    - Tilu
+        if norm(GL*a .+  DLinv*b[:] - a)/length(b) < tol  &&  norm(GU*Tilu .+  DUinv*a - Tilu)/length(b) < tol 
+            @show "$iter" norm(GL*a .+  DLinv*b[:] - a)/length(b)
+            break
+        end
+    end
+    @show norm(Tilu .- Tdir)/length(Tdir)
+
+    T2D .= 0.
+    r2D = zeros(size(T2D)) # temp array
+    F2D = zeros(size(T2D))
+    r2D .= b
+    r2D .= 0*reshape(a, Ncx, Ncy)
+    @show "start LUx = b $(norm(r2D)/length(b))"
+    ForwardBackwardSolveISAI!(T2D, b, pc, ipc, nit, tol)
+    @show norm(T2D[:] .- Tdir)/length(Tdir)
+
+    return nothing
 end
 
 main()

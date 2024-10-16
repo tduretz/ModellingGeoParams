@@ -4,47 +4,8 @@ using IncompleteLU, ILUZero, SparseArrays, LinearAlgebra
 
 include("AssembleKuu.jl")
 
-# Makie.update_theme!(fonts = (regular = texfont(), bold = texfont(:bold), italic = texfont(:italic)))
-
 const cmy = 356.25*3600*24*100
 const ky  = 356.25*3600*24*1e3
-
-```Function from T. James - https://apps.dtic.mil/sti/trecms/pdf/AD1184946.pdf```
-function run_incomplete_cholesky3(A, n = size(A, 1)) 
-    Anz = nonzeros(A)
-    #incomplete cholesky
-    @inbounds for k = 1:n
-    # Get the row indices
-    r1 = Int(SparseArrays.getcolptr(A)[k])
-    r2 = Int(SparseArrays.getcolptr(A)[k+1]-1)
-    r1 = searchsortedfirst(rowvals(A), k, r1, r2, Base.Order.Forward) # @assert r2 ≥ r1
-    Anz[r1] = sqrt(Anz[r1])
-    # Loop through non-zero elements and update the kth column
-    for r = r1+1:r2
-        i = rowvals(A)[r]
-        A[i,k] = A[i,k]/A[k,k]
-        A[k,i] = 0
-    end
-    # Loop through the remaining columns, k:n,
-    #    and update them as needed
-    # (that if [i,k] is non zero AND [i, j] is nonzero then we need to # update the value of [i, ]
-    for r = r1+1:r2
-        j = rowvals(A)[r]
-        s1 = Int(SparseArrays.getcolptr(A)[j])
-        s2 = Int(SparseArrays.getcolptr(A)[j+1]-1)
-        s1 = searchsortedfirst(rowvals(A), j, s1, s2,
-            Base.Order.Forward)
-        # @assert s2 ≥ s1 
-        for s = s1:s2
-            i = rowvals(A)[s]
-            A[i,j] = A[i,j] - A[i,k]*A[j,k] 
-            if i != j
-                A[j,i] = 0 end
-            end 
-        end
-    end
-    return A 
-end
 
 function DiagMechanics2Dx!( Dx, ηc, kc, ηv, Δx, Δy, b, Ncx, Ncy )
     ηW = zeros(Ncx+1, Ncy); ηW[2:end-0,:] .= ηc; ηW[1,:]   = ηW[2,:]
@@ -138,7 +99,7 @@ end
     A2[[1,end],:] .= A2[[2,end-1],:]; A2[:,[1,end]] .= A2[:,[2,end-1]]
 end
 
-@views function MainStokes2D()
+@views function MainMechanicsDiagPC2D()
 
     # Unit system
     CharDim    = SI_units(length=1m, temperature=1C, stress=1Pa, viscosity=1Pas)
@@ -153,7 +114,7 @@ end
     ε̇bg        = -1.0
 
     # Numerical parameters
-    n          = 4
+    n          = 2
     Ncx        = n*40
     Ncy        = n*40
     Nt         = 1
@@ -198,7 +159,7 @@ end
     ηv_maxloc  = η_mat.*ones(Ncx+1, Ncy+1)
 
     # Multiple circles with various viscosities
-    ηi    = (s=1e2, w=1e-2) 
+    ηi    = (s=1e4, w=1e-4) 
     x_inc = [0.0   0.2 -0.3 -0.4  0.0 -0.3 0.4  0.3  0.35 -0.1] 
     y_inc = [0.0   0.4  0.4 -0.3 -0.2  0.2 -0.2 -0.4 0.2  -0.4]
     r_inc = [0.08 0.09 0.05 0.08 0.08  0.1 0.07 0.08 0.07 0.07] 
@@ -232,99 +193,23 @@ end
     probes    = (iters = zeros(Nt), t = zeros(Nt), Ẇ0 = zeros(Nt), τxyi = zeros(Nt), Vx0 = zeros(Nt), maxT = zeros(Nt))
     
     # PT solver
-    niter  = 1e5
-    nout   = 200
-    ϵ      = 1e-5
-    CFL    = 0.999
-    cfact  = 0.9
-
-    PC       = :diag  # best :ilu0 and :ichol ---> same performance
-    if  PC === :diag
-        CFL    = 0.999
-    elseif PC == :ichol
-        CFL    = 0.999*9e3*n
-    elseif PC == :ilu
-        CFL    = 0.999*1e4*n
-    elseif PC == :ilu0
-        CFL    = 0.999*9000*n
-    end
-    ismaxloc = false
+    niter    = 1e5
+    nout     = 200
+    ϵ        = 1e-5
+    CFL      = 0.999
+    cfact    = 0.9
+    PC       = :diag 
+    ismaxloc = true
 
     if PC == :diag
-        DiagMechanics2Dx!( Dx, ηc, ηb, ηv, Δx, Δy, bx, Ncx, Ncy )
-        DiagMechanics2Dy!( Dy, ηc, ηb, ηv, Δx, Δy, by, Ncx, Ncy )
+        if ismaxloc
+            DiagMechanics2Dx!( Dx, ηc_maxloc, ηb, ηv_maxloc, Δx, Δy, bx, Ncx, Ncy )
+            DiagMechanics2Dy!( Dy, ηc_maxloc, ηb, ηv_maxloc, Δx, Δy, by, Ncx, Ncy )
+        else
+            DiagMechanics2Dx!( Dx, ηc, ηb, ηv, Δx, Δy, bx, Ncx, Ncy )
+            DiagMechanics2Dy!( Dy, ηc, ηb, ηv, Δx, Δy, by, Ncx, Ncy )
+        end
     end
-
-    # Direct solution
-    VxDir     = zeros(Ncx+1, Ncy+2); VxDir .= ε̇bg.*xv .+   0*yc'
-    VyDir     = zeros(Ncx+2, Ncy+1); VyDir .=    0*xc .- ε̇bg*yv'
-    NumVx     = reshape(1:(Ncx+1)*Ncy, Ncx+1, Ncy)
-    NumVy     = reshape(NumVx[end].+ (1:(Ncy+1)*Ncx), Ncx, Ncy+1)
-    
-    # Assemble Kuu
-    Kuu, pxx, pyy = KuuBlock(ηc, ηb, ηv, Δx, Δy, NumVx, NumVy)
-    
-    # spy(Kuu)
-    Kc = cholesky(Kuu)
-
-    ResidualMomentumX!(Rx, VxDir, VyDir, Pt, bx, ε̇xx, ε̇xy, ∇v, ηc, ηb, ηv, ones(size(Dx)), τxx, τxy, Δx, Δy, 1.0)
-    ResidualMomentumY!(Ry, VxDir, VyDir, Pt, by, ε̇yy, ε̇xy, ∇v, ηc, ηb, ηv, ones(size(Dy)), τyy, τxy, Δx, Δy, 1.0)
-    errVx = norm(Rx)/(length(Rx))
-    errVy = norm(Ry)/(length(Ry))
-    @printf("Rx = %2.4e\n", errVx)
-    @printf("Ry = %2.4e\n", errVy)
-
-    b = [Rx[:,2:end-1][:]; Ry[2:end-1,:][:]]
-
-    V = Kc\b
-
-    VxDir[:,2:end-1] .+= V[NumVx]
-    VyDir[2:end-1,:] .+= V[NumVy]
-
-    ResidualMomentumX!(Rx, VxDir, VyDir, Pt, bx, ε̇xx, ε̇xy, ∇v, ηc, ηb, ηv, ones(size(Dx)), τxx, τxy, Δx, Δy, 1.0)
-    ResidualMomentumY!(Ry, VxDir, VyDir, Pt, by, ε̇yy, ε̇xy, ∇v, ηc, ηb, ηv, ones(size(Dy)), τyy, τxy, Δx, Δy, 1.0)
-    errVx = norm(Rx.*Dx)/(length(Rx))
-    errVy = norm(Ry.*Dy)/(length(Ry))
-    @printf("Rx = %2.4e\n", errVx)
-    @printf("Ry = %2.4e\n", errVy)
-
-    # Cholesky PC
-    L = copy(Kuu)
-    D = diag(L)
-    @show minimum(D)
-    @show maximum(D)
-
-    # @time ichol!(L) # way to slow!
-    if PC == :ichol
-        α = 0*9e5
-        n = size(Kuu,1)
-        Kuu_shift = Kuu .+ α.*I(n)
-        @time L = run_incomplete_cholesky3( Kuu_shift, size(Kuu,1))
-        L .-= α.*I(n)
-    elseif PC==:ilu
-        @time LU = ilu(Kuu, τ = 5000.0)
-        @show nnz(Kuu)
-        @show nnz(LU)
-        CFL = 0.999*9000
-    elseif PC==:ilu0
-        @time LU = ilu0(Kuu)
-        @show typeof(Kuu)
-        @show nnz(Kuu)
-        @show nnz(LU)
-        # @time LU = ilu(Kuu, τ = 0.1)
-    end
-
-    # # ldiv!(V, LU, b)
-    # # V = L\(L'\b)
-    # # VxDir[:,2:end-1] .+= V[NumVx]
-    # # VyDir[2:end-1,:] .+= V[NumVy]
-
-    # x = zero(V)
-    # # spy(Kuu)
-
-    # PC       = false 
-    # ismaxloc = true
-
     for it=1:Nt
    
         λmin = 1.0
@@ -356,20 +241,6 @@ end
             ResidualMomentumX!(Rx, Vx, Vy, Pt, bx, ε̇xx, ε̇xy, ∇v, ηc, ηb, ηv, Dx, τxx, τxy, Δx, Δy, 1.0)
             ResidualMomentumY!(Ry, Vx, Vy, Pt, by, ε̇yy, ε̇xy, ∇v, ηc, ηb, ηv, Dy, τyy, τxy, Δx, Δy, 1.0)
             
-            if PC == :ichol
-                # Apply PC
-                b .= [Rx[:,2:end-1][:]; Ry[2:end-1,:][:]]
-                x = L'\(L\b)
-                Rx[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
-                Ry[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
-            elseif PC == :ilu || PC==:ilu0
-                b .= [Rx[:,2:end-1][:]; Ry[2:end-1,:][:]]
-                # ldiv!(x, LU, b)
-                x = LU\b
-                Rx[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
-                Ry[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
-            end
-
             @. ∂Vx∂τ                 = (2-c*hVx)/(2+c*hVx)*∂Vx∂τ + 2*hVx/(2+c*hVx).*Rx
             @. δVx                   = hVx*∂Vx∂τ
             @. Vx[2:end-1,2:end-1]  += δVx[2:end-1,2:end-1]
@@ -380,39 +251,15 @@ end
             
             if mod(iter, nout) == 0 || iter==1
 
-                ResidualMomentumX!(KδVx1, Vx,      Vy,      Pt, bx, ε̇xx, ε̇xy, ∇v, ηc, ηb, ηv, Dx, τxx, τxy, Δx, Δy, 0.0) # this allocates because of Vx.-δVx
-                ResidualMomentumX!(KδVx,  Vx.-δVx, Vy.-δVy, Pt, bx, ε̇xx, ε̇xy, ∇v, ηc, ηb, ηv, Dx, τxx, τxy, Δx, Δy, 0.0)
+                ResidualMomentumX!(KδVx1, Vx,      Vy,      Pt, bx, ε̇xx, ε̇xy, ∇v, ηc_minloc, ηb, ηv_minloc, Dx, τxx, τxy, Δx, Δy, 0.0) # this allocates because of Vx.-δVx
+                ResidualMomentumX!(KδVx,  Vx.-δVx, Vy.-δVy, Pt, bx, ε̇xx, ε̇xy, ∇v, ηc_minloc, ηb, ηv_minloc, Dx, τxx, τxy, Δx, Δy, 0.0)
                 # GershgorinMechanics2Dx_Local!( λmaxlocVx, ηc, ηb, ηv, Dx, Δx, Δy, Ncx, Ncy )
                 # hVx[:,2:end-1] .= 2.0./sqrt.(λmaxlocVx)*CFL
 
-                ResidualMomentumY!(KδVy1, Vx,      Vy,      Pt, by, ε̇yy, ε̇xy, ∇v, ηc, ηb, ηv, Dy, τyy, τxy, Δx, Δy, 0.0)
-                ResidualMomentumY!(KδVy,  Vx.-δVx, Vy.-δVy, Pt, by, ε̇yy, ε̇xy, ∇v, ηc, ηb, ηv, Dy, τyy, τxy, Δx, Δy, 0.0)
+                ResidualMomentumY!(KδVy1, Vx,      Vy,      Pt, by, ε̇yy, ε̇xy, ∇v, ηc_minloc, ηb, ηv_minloc, Dy, τyy, τxy, Δx, Δy, 0.0)
+                ResidualMomentumY!(KδVy,  Vx.-δVx, Vy.-δVy, Pt, by, ε̇yy, ε̇xy, ∇v, ηc_minloc, ηb, ηv_minloc, Dy, τyy, τxy, Δx, Δy, 0.0)
                 # GershgorinMechanics2Dy_Local!( λmaxlocVy, ηc, ηb, ηv, Dy, Δx, Δy, Ncx, Ncy )
                 # hVy[2:end-1,:] .= 2.0./sqrt.(λmaxlocVy)*CFL
-
-                if PC == :ichol
-                    b .= [KδVx1[:,2:end-1][:]; KδVy1[2:end-1,:][:]]
-                    x = L'\(L\b)
-                    KδVx1[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
-                    KδVy1[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
-
-                    b .= [KδVx[:,2:end-1][:]; KδVy[2:end-1,:][:]]
-                    x = L'\(L\b)
-                    KδVx[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
-                    KδVy[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
-                elseif PC == :ilu || PC==:ilu0
-                    b .= [KδVx1[:,2:end-1][:]; KδVy1[2:end-1,:][:]]
-                    # ldiv!(x, LU, b)
-                    x = LU\b
-                    KδVx1[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
-                    KδVy1[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
-
-                    b .= [KδVx[:,2:end-1][:]; KδVy[2:end-1,:][:]]
-                    # ldiv!(x, LU, b)
-                    x = LU\b
-                    KδVx[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
-                    KδVy[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
-                end
 
                 λmin = abs(sum(.-δVx.*(KδVx1.-KδVx)) + sum(.-δVy.*(KδVy1.-KδVy))/(sum(δVx.*δVx) + sum(δVy.*δVy)) )
                 c    = 2.0*sqrt(λmin)*cfact
@@ -437,12 +284,11 @@ end
         if mod(it, 10)==0 || it==1
             p1=heatmap(ustrip.(dimensionalize(xc[2:end-1], m, CharDim)./1e3), ustrip.(dimensionalize(yc[2:end-1], m, CharDim)./1e3), ustrip.(dimensionalize(Pt, Pa, CharDim))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0, clims=(-3,3) )
             p2=heatmap(ustrip.(dimensionalize(xv, m, CharDim)./1e3), ustrip.(dimensionalize(yv, m, CharDim)./1e3), log10.(ustrip.(dimensionalize(ηv, Pas, CharDim)))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0 )
-            # p3=heatmap(ustrip.(dimensionalize(xv, m, CharDim)./1e3), ustrip.(dimensionalize(yc, m, CharDim)./1e3), ustrip.(dimensionalize(Vx, m*s^-1, CharDim))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0 )
-            p3=heatmap(ustrip.(dimensionalize(xc, m, CharDim)./1e3), ustrip.(dimensionalize(yv, m, CharDim)./1e3), ustrip.(dimensionalize(Vy, m*s^-1, CharDim))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0 )
-            p4=heatmap(ustrip.(dimensionalize(xc, m, CharDim)./1e3), ustrip.(dimensionalize(yv, m, CharDim)./1e3), ustrip.(dimensionalize(VyDir, m*s^-1, CharDim))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0 )
+            p3=heatmap(ustrip.(dimensionalize(xv, m, CharDim)./1e3), ustrip.(dimensionalize(yc, m, CharDim)./1e3), ustrip.(dimensionalize(Vx, m*s^-1, CharDim))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0 )
+            p4=heatmap(ustrip.(dimensionalize(xc, m, CharDim)./1e3), ustrip.(dimensionalize(yv, m, CharDim)./1e3), ustrip.(dimensionalize(Vy, m*s^-1, CharDim))', title = "$(mean(probes.iters[1:it])) iterations", aspect_ratio=1.0 )
             display(plot(p1,p2,p3,p4))
         end
     end
 end
 
-MainStokes2D()
+MainMechanicsDiagPC2D()

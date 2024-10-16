@@ -9,6 +9,9 @@ include("AssembleKuu.jl")
 const cmy = 356.25*3600*24*100
 const ky  = 356.25*3600*24*1e3
 
+upper(ilu) = SparseMatrixCSC(ilu.m, ilu.n,ilu.u_colptr, ilu.u_rowval, ilu.u_nzval)
+lower(ilu) = SparseMatrixCSC(ilu.m, ilu.n,ilu.l_colptr, ilu.l_rowval, ilu.l_nzval)
+
 ```Function from T. James - https://apps.dtic.mil/sti/trecms/pdf/AD1184946.pdf```
 function run_incomplete_cholesky3(A, n = size(A, 1)) 
     Anz = nonzeros(A)
@@ -53,7 +56,8 @@ function DiagMechanics2Dx!( Dx, ηc, kc, ηv, Δx, Δy, b, Ncx, Ncy )
     kE = zeros(Ncx+1, Ncy); kE[1:end-1,:] .= kc; ηE[end,:] = kE[end-1,:]
     ηS = zeros(Ncx+1, Ncy); ηS            .= ηv[:,1:end-1]
     ηN = zeros(Ncx+1, Ncy); ηN            .= ηv[:,2:end-0]
-    @. Dx[:,2:end-1] = 4//3*ηE/Δx^2 + 4//3*ηW/Δx^2 + ηS/Δy^2 + ηN/Δy^2 + kW/Δx^2 + kE/Δx^2
+    @. Dx[:,2:end-1]  = (4//3*ηE/Δx^2 + 4//3*ηW/Δx^2 + ηS/Δy^2 + ηN/Δy^2 + kW/Δx^2 + kE/Δx^2)
+    # @. Dx[:,2:end-1] +=  (-2//3*ηE+ ηN + kE)/Δx/Δy  + (-2//3*ηE + ηS + kE)/Δx/Δy + (ηN - 2//3*ηW + kW)/Δy/Δx + (ηS- 2//3*ηW + kW)/Δy/Δx  
 end
 
 function DiagMechanics2Dy!( Dy, ηc, kc, ηv, Δx, Δy, b, Ncx, Ncy )
@@ -63,7 +67,8 @@ function DiagMechanics2Dy!( Dy, ηc, kc, ηv, Δx, Δy, b, Ncx, Ncy )
     kN = zeros(Ncx, Ncy+1); kN[:,1:end-1] .= kc
     ηW = zeros(Ncx, Ncy+1); ηW            .= ηv[1:end-1,:]
     ηE = zeros(Ncx, Ncy+1); ηE            .= ηv[2:end-0,:]
-    @. Dy[2:end-1,:] = 4//3*ηS/Δy^2 + 4//3*ηN/Δy^2 + ηW/Δx^2 + ηE/Δx^2 + kS/Δy^2 + kN/Δy^2
+    @. Dy[2:end-1,:]  = (4//3*ηS/Δy^2 + 4//3*ηN/Δy^2 + ηW/Δx^2 + ηE/Δx^2 + kS/Δy^2 + kN/Δy^2)
+    # @. Dy[2:end-1,:] += (-2//3*ηN+ ηE + kN)/Δx/Δy  + (-2//3*ηN + ηW + kN)/Δx/Δy + (ηE - 2//3*ηS + kS)/Δy/Δx + (ηW - 2//3*ηS + kS)/Δy/Δx  
 end
 
 function GershgorinMechanics2Dx_Local!( λmaxloc, ηc, kc, ηv, Dx, Δx, Δy, Ncx, Ncy )
@@ -153,7 +158,7 @@ end
     ε̇bg        = -1.0
 
     # Numerical parameters
-    n          = 4
+    n          = 2
     Ncx        = n*40
     Ncy        = n*40
     Nt         = 1
@@ -198,20 +203,23 @@ end
     ηv_maxloc  = η_mat.*ones(Ncx+1, Ncy+1)
 
     # Multiple circles with various viscosities
-    ηi    = (s=1e2, w=1e-2) 
+    ηi    = (s=1e4, w=1e-4) 
     x_inc = [0.0   0.2 -0.3 -0.4  0.0 -0.3 0.4  0.3  0.35 -0.1] 
     y_inc = [0.0   0.4  0.4 -0.3 -0.2  0.2 -0.2 -0.4 0.2  -0.4]
     r_inc = [0.08 0.09 0.05 0.08 0.08  0.1 0.07 0.08 0.07 0.07] 
     η_inc = [ηi.s ηi.w ηi.w ηi.s ηi.w ηi.s ηi.w ηi.s ηi.s ηi.w]
+    # Set sharp viscosity on vertices
     for inc in eachindex(η_inc)
         ηv[(xv.-x_inc[inc]).^2 .+ (yv'.-y_inc[inc]).^2 .< r_inc[inc]^2 ] .= η_inc[inc]
     end
+    # Set smooth viscosity on centroids
     ηc                  .= 0.25.*(ηv[1:end-1,1:end-1] .+ ηv[2:end-0,1:end-1] .+ ηv[1:end-1,2:end-0] .+ ηv[2:end-0,2:end-0])
-    
+    # Set sharp viscosity on centroid positions (temp array)
     ηc2 = η_mat*ones(Ncx+2, Ncy+2)
     for inc in eachindex(η_inc)
         ηc2[(xc.-x_inc[inc]).^2 .+ (yc'.-y_inc[inc]).^2 .< r_inc[inc]^2 ] .= η_inc[inc]
     end
+    # Set smooth viscosity on vertices
     ηv                  .= 0.25.*(ηc2[1:end-1,1:end-1] .+ ηc2[2:end-0,1:end-1] .+ ηc2[1:end-1,2:end-0] .+ ηc2[2:end-0,2:end-0])
 
     ηc_maxloc .= ηc
@@ -236,23 +244,48 @@ end
     nout   = 200
     ϵ      = 1e-5
     CFL    = 0.999
-    cfact  = 0.9
+    cfact  = 0.95
 
-    PC       = :diag  # best :ilu0 and :ichol ---> same performance
+    PC       = :isai  # best :ilu0 and :ichol ---> same performance
     if  PC === :diag
         CFL    = 0.999
+        ismaxloc = true
     elseif PC == :ichol
         CFL    = 0.999*9e3*n
     elseif PC == :ilu
         CFL    = 0.999*1e4*n
     elseif PC == :ilu0
         CFL    = 0.999*9000*n
-    end
-    ismaxloc = false
+    elseif PC == :parilu0 # works but requires too many iterations to apply PC
+        CFL    = 0.999*9000*n
+        nit    = 100
+        tolILU = 1e-9
+        rel    = 1.0
+        tol_isai = 1e-4
+    elseif PC == :isai 
+        ismaxloc = false
+        CFL    = 0.999*9000*n
+        CFL    = 0.999*5000 # for ISAI lev 0
+        # CFL    = 0.999*5200 # for ISAI lev 1
+        # CFL    = 0.999*4950 # for ISAI diag
+        # CFL    = 0.999*6800 # for Jacobi
 
+        CFL    = 0.999*5000/2*n# for ISAI lev 0
+        # CFL    = 0.999*5200/1.5*2 # for ISAI lev 1
+        nit    = 50
+        tolILU = 1e-9
+        tol_isai = 1e-4
+    end
+
+   
     if PC == :diag
-        DiagMechanics2Dx!( Dx, ηc, ηb, ηv, Δx, Δy, bx, Ncx, Ncy )
-        DiagMechanics2Dy!( Dy, ηc, ηb, ηv, Δx, Δy, by, Ncx, Ncy )
+        if ismaxloc
+            DiagMechanics2Dx!( Dx, ηc_maxloc, ηb, ηv_maxloc, Δx, Δy, bx, Ncx, Ncy )
+            DiagMechanics2Dy!( Dy, ηc_maxloc, ηb, ηv_maxloc, Δx, Δy, by, Ncx, Ncy )
+        else
+            DiagMechanics2Dx!( Dx, ηc, ηb, ηv, Δx, Δy, bx, Ncx, Ncy )
+            DiagMechanics2Dy!( Dy, ηc, ηb, ηv, Δx, Δy, by, Ncx, Ncy )
+        end
     end
 
     # Direct solution
@@ -262,7 +295,9 @@ end
     NumVy     = reshape(NumVx[end].+ (1:(Ncy+1)*Ncx), Ncx, Ncy+1)
     
     # Assemble Kuu
-    Kuu, pxx, pyy = KuuBlock(ηc, ηb, ηv, Δx, Δy, NumVx, NumVy)
+    Kuu, kxx, kyy = KuuBlock(ηc, ηb, ηv, Δx, Δy, NumVx, NumVy)
+    Kuu_maxloc, kxx_maxloc, kyy_maxloc = KuuBlock(ηc_maxloc, ηb, ηv_maxloc, Δx, Δy, NumVx, NumVy)
+
     
     # spy(Kuu)
     Kc = cholesky(Kuu)
@@ -305,25 +340,118 @@ end
         @time LU = ilu(Kuu, τ = 5000.0)
         @show nnz(Kuu)
         @show nnz(LU)
-        CFL = 0.999*9000
     elseif PC==:ilu0
         @time LU = ilu0(Kuu)
         @show typeof(Kuu)
         @show nnz(Kuu)
         @show nnz(LU)
-        # @time LU = ilu(Kuu, τ = 0.1)
+    elseif PC==:parilu0
+        pxx    = ILU_v3(kxx, 500, tolILU)
+        pyy    = ILU_v3(kyy, 500, tolILU)
+        # @time LU = ilu0(Kuu)
+        # L = lower(LU)
+        # U = upper(LU)
+        # Luu, Uuu = AssembleLU(pxx, pyy, NumVx, NumVy)
+
+        # @show typeof(L)
+        # @show typeof(Luu)
+        # @show norm(Luu-L)/norm(Luu)
+
+        # @show typeof(U)
+        # @show typeof(Uuu)
+        # @show norm(Uuu-U)/norm(Uuu)
+    elseif PC==:isai
+        pxx    = ILU_v3(kxx, 50, tolILU)
+        pyy    = ILU_v3(kyy, 50, tolILU)
+        ipxx   = ISAI_Poisson2D(pxx)
+        ipyy   = ISAI_Poisson2D(pyy)
+
+
+        # ipxx.cC .= 1 ./ reshape(D[NumVx[:]], Ncx+1, Ncy)
+        # ipxx.cS .=0 
+        # ipxx.cN .=0 
+        # ipxx.cW .=0 
+        # ipxx.cE .=0 
+        # ipyy.cC .= 1 ./ reshape(D[NumVy[:]], Ncx, Ncy+1)
+        # ipyy.cS .=0 
+        # ipyy.cN .=0 
+        # ipyy.cW .=0 
+        # ipyy.cE .=0 
+
+        # # Assemble factors
+        # @time LU = ilu0(Kuu)
+        # L = lower(LU)
+        # U = upper(LU)
+        # Luu, Uuu = AssembleLU(pxx, pyy, NumVx, NumVy)
+        # @show typeof(L)
+        # @show typeof(Luu)
+        # @show norm(Luu-L)/norm(Luu)
+        # @show typeof(U)
+        # @show typeof(Uuu)
+        # @show norm(Uuu-U)/norm(Uuu)
+
+        # # Assemble inverses
+        # Luui, Uuui = AssembleLU(ipxx, ipyy, NumVx, NumVy)
+        # Li_full = SparseMatrixCSC( inv(Matrix(Luu+I(size(L,1)))) )
+        # Li = SparseMatrixCSC( Li_full .* (Matrix(Luu+I(size(L,1))).!=0) )
+        # @show norm(Matrix(Luui) .- Li .* (Matrix(Luu).!=0))/norm(Luu)
+        # Ui_full = SparseMatrixCSC( inv(Matrix(Uuu)) )
+        # Ui = SparseMatrixCSC( Ui_full              .* (Matrix(Uuu).!=0) )
+        # @show norm(Matrix(Uuui) .- Ui .* (Matrix(Uuu).!=0))/norm(Uuu)
+
+        # Luu1, Uuu1 =  AssembleLU_lev1(pxx, pyy, NumVx, NumVy)
+
+        # Li = SparseMatrixCSC( Li_full .* (Matrix(Luu1+I(size(L,1))).!=0) )
+        # Ui = SparseMatrixCSC( Ui_full              .* (Matrix(Uuu1).!=0) )
+
+        # Li = spdiagm(diag(Li))
+        # Ui = spdiagm(diag(Ui))
+
+        # # original Jacobi
+        # DiagMechanics2Dx!( Dx, ηc, ηb, ηv, Δx, Δy, bx, Ncx, Ncy )
+        # DiagMechanics2Dy!( Dy, ηc, ηb, ηv, Δx, Δy, by, Ncx, Ncy )
+        # Ui = spdiagm([1 ./Dx[:,2:end-1][:]; 1 ./Dy[2:end-1,:][:]])
+        # Dx .= 1
+        # Dy .= 1
+
+        # b .= [Vx[:,2:end-1][:]; Vy[2:end-1,:][:]]
+        # x = Ui*(Li*b)
+        # @show norm(x)
+        # b .= [Vx[:,2:end-1][:]; Vy[2:end-1,:][:]]
+        # x = Uuui*((Luui+I(size(L,1)))*b)
+        # @show norm(x)
+        # ApplyISAI!(Rx[:,2:end-1], Vx[:,2:end-1], ipxx)
+        # ApplyISAI!(Ry[2:end-1,:], Vy[2:end-1,:], ipyy)
+        # x .= [Rx[:,2:end-1][:]; Ry[2:end-1,:][:]]
+        # @show norm(x)
     end
+
+    # if PC == :diag
+    #     nit    = 50
+    #     tolILU = 1e-9
+    #     pxx    = ILU_v3(kxx, nit, tolILU)
+    #     pyy    = ILU_v3(kyy, nit, tolILU)
+    #     Dx[:,2:end-1] .= pxx.cC
+    #     Dy[2:end-1,:] .= pyy.cC
+    # end
 
     # # ldiv!(V, LU, b)
     # # V = L\(L'\b)
     # # VxDir[:,2:end-1] .+= V[NumVx]
     # # VyDir[2:end-1,:] .+= V[NumVy]
-
     # x = zero(V)
     # # spy(Kuu)
-
     # PC       = false 
-    # ismaxloc = true
+    ismaxloc = false
+
+    tempx = zero(Rx)
+    tempy = zero(Ry)
+    Sx    = zero(Rx)
+    Sy   = zero(Ry)
+    Sx0  = zero(Rx)
+    Sy0  = zero(Ry)
+    Rx0  = zero(Rx)
+    Ry0  = zero(Ry)
 
     for it=1:Nt
    
@@ -368,6 +496,29 @@ end
                 x = LU\b
                 Rx[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
                 Ry[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
+            elseif PC == :parilu0
+                tempx .= Rx
+                tempy .= Ry
+                Rx .= 0.
+                Ry .= 0.
+                ForwardBackwardSolve!(Rx[:,2:end-1], tempx[:,2:end-1], pxx, nit, tol_isai, rel)
+                ForwardBackwardSolve!(Ry[2:end-1,:], tempy[2:end-1,:], pyy, nit, tol_isai, rel)
+                # LaggedSubstitutions!(Rx[:,2:end-1], Sx[:,2:end-1], Rx0[:,2:end-1], Sx0[:,2:end-1], pxx, tempx[:,2:end-1])
+                # LaggedSubstitutions!(Ry[2:end-1,:], Sy[2:end-1,:], Ry0[2:end-1,:], Sy0[2:end-1,:], pyy, tempy[2:end-1,:])
+            elseif PC == :isai
+                # b .= [Rx[:,2:end-1][:]; Ry[2:end-1,:][:]]
+                # x = Ui*(Li*b)
+                # Rx[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
+                # Ry[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
+
+                tempx .= Rx
+                tempy .= Ry
+                # Rx    .= 0.
+                # Ry    .= 0.
+                ApplyISAI!(Rx[:,2:end-1], tempx[:,2:end-1], ipxx)
+                ApplyISAI!(Ry[2:end-1,:], tempy[2:end-1,:], ipyy)
+                # # # ForwardBackwardSolveISAI!(Rx[:,2:end-1], tempx[:,2:end-1], pxx, ipxx, nit, tol_isai)
+                # # # ForwardBackwardSolveISAI!(Ry[2:end-1,:], tempy[2:end-1,:], pyy, ipyy, nit, tol_isai)
             end
 
             @. ∂Vx∂τ                 = (2-c*hVx)/(2+c*hVx)*∂Vx∂τ + 2*hVx/(2+c*hVx).*Rx
@@ -382,11 +533,11 @@ end
 
                 ResidualMomentumX!(KδVx1, Vx,      Vy,      Pt, bx, ε̇xx, ε̇xy, ∇v, ηc, ηb, ηv, Dx, τxx, τxy, Δx, Δy, 0.0) # this allocates because of Vx.-δVx
                 ResidualMomentumX!(KδVx,  Vx.-δVx, Vy.-δVy, Pt, bx, ε̇xx, ε̇xy, ∇v, ηc, ηb, ηv, Dx, τxx, τxy, Δx, Δy, 0.0)
-                # GershgorinMechanics2Dx_Local!( λmaxlocVx, ηc, ηb, ηv, Dx, Δx, Δy, Ncx, Ncy )
-                # hVx[:,2:end-1] .= 2.0./sqrt.(λmaxlocVx)*CFL
-
                 ResidualMomentumY!(KδVy1, Vx,      Vy,      Pt, by, ε̇yy, ε̇xy, ∇v, ηc, ηb, ηv, Dy, τyy, τxy, Δx, Δy, 0.0)
                 ResidualMomentumY!(KδVy,  Vx.-δVx, Vy.-δVy, Pt, by, ε̇yy, ε̇xy, ∇v, ηc, ηb, ηv, Dy, τyy, τxy, Δx, Δy, 0.0)
+                
+                # GershgorinMechanics2Dx_Local!( λmaxlocVx, ηc, ηb, ηv, Dx, Δx, Δy, Ncx, Ncy )
+                # hVx[:,2:end-1] .= 2.0./sqrt.(λmaxlocVx)*CFL
                 # GershgorinMechanics2Dy_Local!( λmaxlocVy, ηc, ηb, ηv, Dy, Δx, Δy, Ncx, Ncy )
                 # hVy[2:end-1,:] .= 2.0./sqrt.(λmaxlocVy)*CFL
 
@@ -412,6 +563,39 @@ end
                     x = LU\b
                     KδVx[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
                     KδVy[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
+                elseif PC == :parilu0
+                    tempx .= KδVx1
+                    tempy .= KδVy1
+                    ForwardBackwardSolve!(KδVx1[:,2:end-1], tempx[:,2:end-1], pxx, nit, tol_isai, rel)
+                    ForwardBackwardSolve!(KδVy1[2:end-1,:], tempy[2:end-1,:], pyy, nit, tol_isai, rel)
+                    tempx .= KδVx
+                    tempy .= KδVy
+                    ForwardBackwardSolve!(KδVx[:,2:end-1], tempx[:,2:end-1], pxx, nit, tol_isai, rel)
+                    ForwardBackwardSolve!(KδVy[2:end-1,:], tempy[2:end-1,:], pyy, nit, tol_isai, rel)
+                elseif PC == :isai
+                    # b .= [KδVx1[:,2:end-1][:]; KδVy1[2:end-1,:][:]]
+                    # x = Ui*(Li*b)
+                    # KδVx1[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
+                    # KδVy1[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
+
+                    # b .= [KδVx[:,2:end-1][:]; KδVy[2:end-1,:][:]]
+                    # x = Ui*(Li*b)
+                    # KδVx[:,2:end-1] .= reshape(x[1:NumVx[end]], Ncx+1, Ncy )
+                    # KδVy[2:end-1,:] .= reshape(x[NumVx[end]+1:end], Ncx, Ncy+1 )
+
+                    tempx .= KδVx1
+                    tempy .= KδVy1
+                    ApplyISAI!(KδVx1[:,2:end-1], tempx[:,2:end-1], ipxx)
+                    ApplyISAI!(KδVy1[2:end-1,:], tempy[2:end-1,:], ipyy)
+                    # ForwardBackwardSolveISAI!(KδVx1[:,2:end-1], tempx[:,2:end-1], pxx, ipxx, nit, tol_isai)
+                    # ForwardBackwardSolveISAI!(KδVy1[2:end-1,:], tempy[2:end-1,:], pyy, ipyy, nit, tol_isai)
+                    
+                    tempx .= KδVx
+                    tempy .= KδVy
+                    ApplyISAI!(KδVx[:,2:end-1], tempx[:,2:end-1], ipxx)
+                    ApplyISAI!(KδVy[2:end-1,:], tempy[2:end-1,:], ipyy)
+                    # # ForwardBackwardSolveISAI!(KδVx[:,2:end-1], tempx[:,2:end-1], pxx, ipxx, nit, tol_isai)
+                    # # ForwardBackwardSolveISAI!(KδVy[2:end-1,:], tempy[2:end-1,:], pyy, ipyy, nit, tol_isai)
                 end
 
                 λmin = abs(sum(.-δVx.*(KδVx1.-KδVx)) + sum(.-δVy.*(KδVy1.-KδVy))/(sum(δVx.*δVx) + sum(δVy.*δVy)) )
@@ -427,11 +611,13 @@ end
                 @printf("Ry = %2.4e\n", errVy)
                 @show (λmin, maximum(λmaxlocVx), log10(maximum(λmaxlocVx))-log10(λmin))
                 @show (λmin, maximum(λmaxlocVy), log10(maximum(λmaxlocVx))-log10(λmin))
-                if ( isnan(errVx) ) error() end
+                if ( isnan(errVx) || errVx>1e6 ) error() end
                 ( errVx < ϵ ) && break
             end
         end
         probes.iters[it] = iters
+
+        @show (minimum(λmaxlocVx), maximum(λmaxlocVx))
 
         # Visualisation
         if mod(it, 10)==0 || it==1

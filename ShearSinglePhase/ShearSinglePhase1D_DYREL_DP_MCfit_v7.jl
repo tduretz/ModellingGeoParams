@@ -4,6 +4,8 @@ import LinearAlgebra:norm
 
 const cmy = 356.25*3600*24*100
 
+# with Yury 24/01/24
+
 @inline function Residuals!(R, D, τ, τ0, Pt, Pt0, ε̇, ∇v, V, BC, arrays, yield, rel, NL, Δt, Δy)
     # Kinematics
     # Vx BC
@@ -116,15 +118,15 @@ function main()
     # σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe A - Vermeer
     σxxB       = nondimensionalize(-400e3Pa, CharDim) # Courbe B - Vermeer
     σyyB       = nondimensionalize(-100e3Pa, CharDim) # Courbe B - Vermeer
-    σzzB       = σxxB
+    σzzB       = 0*σxxB
     PB         = -(σxxB + σyyB + σzzB)/3.0
     τxxB       = PB + σxxB
     τyyB       = PB + σyyB
     τzzB       = PB + σzzB
     τxyB       = 0.0
 
-    E          = nondimensionalize(45MPa, CharDim)
-    ν          = 0.2
+    E          = nondimensionalize(20MPa, CharDim)
+    ν          = 0.0
     Ly         = nondimensionalize(4e4m, CharDim)
     Ẇ0         = nondimensionalize(5e-5Pa/s, CharDim)
     σ          = Ly/40
@@ -132,7 +134,7 @@ function main()
     G          = E/2.0/(1+ν)
     Kbulk      = E/3.0/(1-2ν) 
     μs         = nondimensionalize(1e52Pa*s, CharDim)
-    MCfit      = :inscribed  # :compression, :extension or :inscribed (https://www.researchgate.net/publication/267787500_Measuring_discrepancies_between_Coulomb_and_other_geotechnical_criteria_Drucker-Prager_and_Matsuoka-Nakai)
+    MCfit      = :extension  # :compression, :extension or :inscribed (https://www.researchgate.net/publication/267787500_Measuring_discrepancies_between_Coulomb_and_other_geotechnical_criteria_Drucker-Prager_and_Matsuoka-Nakai)
     MC         = ( 
         Coh0       = nondimensionalize(0.0Pa, CharDim),
         ϕ          = 40.0*π/180.,
@@ -338,8 +340,8 @@ function main()
             # p4=plot!(1:it, ustrip.(dimensionalize(probes.τxy0[1:it], Pa, CharDim))/1e3, label="τxy" )
             app_fric      =  ustrip.(-probes.τxyB[1:it]./probes.σyyB[1:it])
             app_fric_theo =  sind.(2*probes.theta[1:it]) .* sin(yield.ϕ) ./ (1 .+ cosd.(2*probes.theta[1:it]) .* sin(yield.ϕ))
-            p4=plot!((1:it)*ε0*Δt, app_fric, label="-τxy/σyyBC", title=@sprintf("max = %1.4f", maximum(app_fric)) )
-            p4=plot!((1:it)*ε0*Δt, app_fric_theo, label="theoritical", title=@sprintf("max = %1.4f", maximum(app_fric_theo)) )
+            p4=plot!((1:it)*ε0*Δt.*2, app_fric, label="-τxy/σyyBC", title=@sprintf("max = %1.4f", maximum(app_fric)) )
+            p4=plot!((1:it)*ε0*Δt.*2, app_fric_theo, label="theoritical", title=@sprintf("max = %1.4f", maximum(app_fric_theo)) )
             # p4=plot!((1:it)*ε0*Δt, ustrip.(dimensionalize(-probes.σyy0[1:it], Pa, CharDim))/1e3, label="σyyBC" )
             display(plot(p1,p2,p3,p4))
         end

@@ -256,18 +256,139 @@ function main()
     @show norm(PE[2:end-2] - diag(U,+1))
     @show norm(PW[3:end-1] - diag(L,-1))
 
+    @info "Convert ILUZero LU to independant L and U" 
     upper(ilu) = SparseMatrixCSC(ilu.m, ilu.n,ilu.u_colptr, ilu.u_rowval, ilu.u_nzval)
     lower(ilu) = SparseMatrixCSC(ilu.m, ilu.n,ilu.l_colptr, ilu.l_rowval, ilu.l_nzval)
-    U_aim = upper(LU)
-    L_aim = lower(LU)
+    U_aim      = upper(LU)
+    L_aim      = lower(LU)
+
+    @info "Check if iterative v1 converges to exact ILUZero"
     @show norm(U_aim - U)
     @show norm(L_aim - L)
 
+    @info "Check if iterative v2 converges to exact ILUZero"
     U2       = SparseMatrixCSC(Tridiagonal(0.0.*PW[3:end-1], PC[2:end-1], PE[2:end-2]))
     L2       = SparseMatrixCSC(Tridiagonal(PW[3:end-1], 0.0.*PC[2:end-1], 0.0.*PE[2:end-2]))
     @show norm(U_aim - U2)
     @show norm(L_aim - L2)
+
+    @info "Test ISAI (Incomplete sparse approximate inverse)"
+
+    nit = 5
+
+    @info "Check if SPAI of (L+I) converges to (L+I)⁻¹"
+    Ld   = L + I(size(L,1))
+    Linv = inv(Ld) 
+    Ml  = copy(L)
+    Ml0 = copy(L)
+    for it=1:nit
+        Ml0 .= Ml
+        for j=1:size(M,1)
+            Ml[j,j] = 1.0/Ld[j,j]
+            for k=j+1:size(M,2)
+                Ml[k,j] = 0.0
+                for r=j:k-1
+                    Ml[k,j] -= Ld[k,r] * Ml0[r,j]
+                end
+                Ml[k,j] /= Ld[k,k]
+            end
+        end
+        @show norm(Ml -  Linv)
+    end
+
+    @info "Check if SPAI of U converges to U⁻¹"
+    Uinv = inv(U)  
+    Mu  = copy(U)
+    Mu0 = copy(U)
+    for it=1:nit
+        Mu0 .= Mu
+        for j=1:size(M,1)
+            Mu[j,j] = 1.0/U[j,j]
+            for k=j+1:size(M,2)
+                Mu[j,k] = 0.0  # all indices flipped for U
+                for r=j:k-1
+                    Mu[j,k] -= U[r,k] * Mu0[j,r]
+                end
+                Mu[j,k] /= U[k,k]
+            end
+        end
+        @show norm(Mu -  Uinv)
+    end
+
+    @info "Check if SPAI of (L+I) converges to (L+I)⁻¹ - sparsity restricted"
+    Ld   = L+I(size(L,1))
+    Ml  = copy(L)
+    Ml0 = copy(L)
+    for it=1:nit
+        Ml0 .= Ml
+        for j=1:size(M,1)
+            Ml[j,j] = 1.0/Ld[j,j]
+            for k=j+1:size(M,2)
+                if abs(Ld[k,j])>1e-13
+                    Ml[k,j] = 0.0
+                    for r=j:k-1
+                        Ml[k,j] -= Ld[k,r] * Ml0[r,j]
+                    end
+                    Ml[k,j] /= Ld[k,k]
+                end
+            end
+        end
+        @show norm(Ml -  Linv)
+    end
+    display(Linv)
+    display(Ml)
+
+    @info "Check if SPAI of U converges to U⁻¹ - sparsity restricted"
+    Uinv = inv(U)  
+    Mu  = copy(U)
+    Mu0 = copy(U)
+    for it=1:nit
+        Mu0 .= Mu
+        for j=1:size(M,1)
+            Mu[j,j] = 1.0/U[j,j]
+            for k=j+1:size(M,2)
+                if abs(Ld[k,j])>1e-13
+                    Mu[j,k] = 0.0  # all indices flipped for U
+                    for r=j:k-1
+                        Mu[j,k] -= U[r,k] * Mu0[j,r]
+                    end
+                    Mu[j,k] /= U[k,k]
+                end
+            end
+        end
+        @show norm(Mu -  Uinv)
+    end
+    display(Uinv)
+    display(Mu)
+
+
+    @info "M2Di style inverse of L and U"
+    LC   = ones(size(PC))
+    LiW  = copy(PW)
+    LiC  = ones(size(LC))
+
+    UC   = copy(PC) 
+    UiC  = copy(PC) 
+    UiE  = copy(PE) 
+    
+    # Iterations over coefficients
+    for iter=1:1
+        # Lower part
+        LiW[3:end-1] .=  -1.0./LC[2:end-2] .* (LiW[3:end-1].*LC[2:end-2])
+        LiC[2:end-1] .=   1.0./LC[2:end-1] 
+        # Upper part
+        UiC[2:end-1] .=  1.0./UC[2:end-1] 
+        UiE[2:end-2] .= -1.0./UC[2:end-2] .* (PE[2:end-2]./UC[3:end-1])
         
+    end
+    @info "Lower check"
+    @show norm(LiC[2:end-1] - diag(Ml))
+    @show norm(LiW[3:end-1] - diag(Ml,-1))
+    @info "Upper check"
+    @show norm(UiC[2:end-1] - diag(Mu))
+    @show norm(UiE[2:end-2] - diag(Mu,1))
+
+    a=1;
 end
 
 
