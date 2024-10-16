@@ -95,7 +95,7 @@ end
     @. RT[2:end-1,2:end-1] = -transient*(Tc[2:end-1,2:end-1] - rhs*Tc0[2:end-1,2:end-1]) / Δt - 1.0/(ρ*Cp) * (qTx[2:end,:] - qTx[1:end-1,:])/Δx - 1.0/(ρ*Cp) * (qTy[:,2:end] - qTy[:,1:end-1])/Δy + rhs/(ρ*Cp) *  Qr[2:end-1,2:end-1]
 end
 
-@views function MainPoisson2D(n, auto, solver, ϵ2PCG, PC, nout)
+@views function MainPoisson2D(n, auto, solver, ϵ, ϵ2PCG, PC, nout)
 
     # Unit system
     CharDim    = SI_units(length=1000m, temperature=1000C, stress=1e7Pa, viscosity=1e20Pas)
@@ -168,7 +168,6 @@ end
 
     # PT solver
     niter  = 25000
-    ϵ      = 1e-11
     CFL    = 0.99
     cfact  = 0.9
     err    = zeros(niter)
@@ -292,18 +291,36 @@ end
     return iters
 end
 
+############ Exact solves ############
+
+ϵ = 1e-11
+
 @info "DYREL"
-MainPoisson2D(4, true, :DYREL, 1e-30, :diag,  100)
-MainPoisson2D(4, true, :DYREL, 1e-30, :ilu,   100)
-MainPoisson2D(4, true, :DYREL, 1e-30, :ichol, 100)
+MainPoisson2D(4, true, :DYREL, ϵ, 1e-30, :diag,  100)
+MainPoisson2D(4, true, :DYREL, ϵ, 1e-30, :ilu,   100)
+MainPoisson2D(4, true, :DYREL, ϵ, 1e-30, :ichol, 100)
 
 ϵ2PCG = 1e-6
 @info "DYREL 2 CG if error below $(ϵ2PCG)"
-MainPoisson2D(4, true, :DYREL, ϵ2PCG, :diag,  100)
-MainPoisson2D(4, true, :DYREL, ϵ2PCG, :ilu,   100)
-MainPoisson2D(4, true, :DYREL, ϵ2PCG, :ichol, 100)
+MainPoisson2D(4, true, :DYREL, ϵ, ϵ2PCG, :diag,  100)
+MainPoisson2D(4, true, :DYREL, ϵ, ϵ2PCG, :ilu,   100)
+MainPoisson2D(4, true, :DYREL, ϵ, ϵ2PCG, :ichol, 100)
 
 @info "PCG"
-MainPoisson2D(4, true, :PCG, 1e-30, :diag,  100)
-MainPoisson2D(4, true, :PCG, 1e-30, :ilu,   100)
-MainPoisson2D(4, true, :PCG, 1e-30, :ichol, 100)
+MainPoisson2D(4, true, :PCG, ϵ, 1e-30, :diag,  100)
+MainPoisson2D(4, true, :PCG, ϵ, 1e-30, :ilu,   100)
+MainPoisson2D(4, true, :PCG, ϵ, 1e-30, :ichol, 100)
+
+############ Inexact solves ############
+
+ϵ = 1e-2
+
+@info "DYREL"
+MainPoisson2D(4, true, :DYREL, ϵ, 1e-30, :diag,  100)
+MainPoisson2D(4, true, :DYREL, ϵ, 1e-30, :ilu,   100)
+MainPoisson2D(4, true, :DYREL, ϵ, 1e-30, :ichol, 100)
+
+@info "PCG"
+MainPoisson2D(4, true, :PCG, ϵ, 1e-30, :diag,  100)
+MainPoisson2D(4, true, :PCG, ϵ, 1e-30, :ilu,   100)
+MainPoisson2D(4, true, :PCG, ϵ, 1e-30, :ichol, 100)
